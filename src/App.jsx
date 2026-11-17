@@ -1,5 +1,10 @@
 
+import { useState } from "react";
 import "./App.css";
+
+import Clientes from "./Clientes";
+import Orcamentos from "./Orcamentos";
+
 import {
   LayoutDashboard,
   FileText,
@@ -17,6 +22,8 @@ import {
 } from "lucide-react";
 
 function App() {
+  const [paginaAtual, setPaginaAtual] = useState("dashboard");
+
   const orcamentos = [
     {
       numero: "#0001",
@@ -41,6 +48,10 @@ function App() {
     },
   ];
 
+  function abrirPagina(pagina) {
+    setPaginaAtual(pagina);
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -48,6 +59,7 @@ function App() {
           <div className="brand-icon">
             <FileText size={24} />
           </div>
+
           <div>
             <h2>OrçaFácil</h2>
             <span>Gestão inteligente</span>
@@ -57,35 +69,63 @@ function App() {
         <div className="menu-label">MENU PRINCIPAL</div>
 
         <nav className="menu">
-          <a className="menu-item active" href="#">
+          <a
+            className={`menu-item ${
+              paginaAtual === "dashboard" ? "active" : ""
+            }`}
+            href="#dashboard"
+            onClick={(e) => {
+              e.preventDefault();
+              abrirPagina("dashboard");
+            }}
+          >
             <LayoutDashboard size={19} />
             Dashboard
           </a>
 
-          <a className="menu-item" href="#">
+          <a
+            className={`menu-item ${
+              paginaAtual === "orcamentos" ? "active" : ""
+            }`}
+            href="#orcamentos"
+            onClick={(e) => {
+              e.preventDefault();
+              abrirPagina("orcamentos");
+            }}
+          >
             <FileText size={19} />
             Orçamentos
           </a>
 
-          <a className="menu-item" href="#">
+          <a
+            className={`menu-item ${
+              paginaAtual === "clientes" ? "active" : ""
+            }`}
+            href="#clientes"
+            onClick={(e) => {
+              e.preventDefault();
+              abrirPagina("clientes");
+            }}
+          >
             <Users size={19} />
             Clientes
           </a>
 
-          <a className="menu-item" href="#">
+          <a className="menu-item" href="#recibos">
             <Receipt size={19} />
             Recibos
           </a>
         </nav>
 
         <div className="sidebar-bottom">
-          <a className="menu-item" href="#">
+          <a className="menu-item" href="#configuracoes">
             <Settings size={19} />
             Configurações
           </a>
 
           <div className="profile">
             <div className="avatar">OF</div>
+
             <div>
               <strong>Minha empresa</strong>
               <span>Plano gratuito</span>
@@ -106,116 +146,146 @@ function App() {
             <input placeholder="Pesquisar..." />
           </div>
 
-          <button className="notification">
+          <button
+            type="button"
+            className="notification"
+            aria-label="Notificações"
+          >
             <Bell size={20} />
           </button>
         </header>
 
         <section className="content">
-          <div className="welcome">
-            <div>
-              <span className="date-label">PAINEL DE CONTROLE</span>
-              <h1>Visão geral</h1>
-              <p>Bem-vindo ao seu painel de gestão.</p>
-            </div>
-
-            <button className="primary-button">
-              <Plus size={19} />
-              Novo orçamento
-            </button>
-          </div>
-
-          <div className="stats">
-            <StatCard
-              icon={<FileText />}
-              title="Total de orçamentos"
-              value="24"
-              detail="Documentos criados"
-              color="green"
+          {paginaAtual === "orcamentos" ? (
+            <Orcamentos
+              aoVoltar={() => abrirPagina("dashboard")}
             />
+          ) : paginaAtual === "clientes" ? (
+            <Clientes />
+          ) : (
+            <>
+              <div className="welcome">
+                <div>
+                  <span className="date-label">
+                    PAINEL DE CONTROLE
+                  </span>
 
-            <StatCard
-              icon={<Clock />}
-              title="Pendentes"
-              value="08"
-              detail="Aguardando aprovação"
-              color="yellow"
-            />
+                  <h1>Visão geral</h1>
 
-            <StatCard
-              icon={<CheckCircle2 />}
-              title="Aprovados"
-              value="12"
-              detail="Orçamentos aprovados"
-              color="blue"
-            />
+                  <p>Bem-vindo ao seu painel de gestão.</p>
+                </div>
 
-            <StatCard
-              icon={<Wallet />}
-              title="Total recebido"
-              value="R$ 8.450"
-              detail="Valores registrados"
-              color="purple"
-            />
-          </div>
-
-          <section className="panel">
-            <div className="panel-header">
-              <div>
-                <h2>Orçamentos recentes</h2>
-                <p>Acompanhe seus últimos documentos.</p>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => abrirPagina("orcamentos")}
+                >
+                  <Plus size={19} />
+                  Novo orçamento
+                </button>
               </div>
 
-              <button className="secondary-button">
-                Ver todos
-              </button>
-            </div>
+              <div className="stats">
+                <StatCard
+                  icon={<FileText />}
+                  title="Total de orçamentos"
+                  value="24"
+                  detail="Documentos criados"
+                  color="green"
+                />
 
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>NÚMERO</th>
-                    <th>CLIENTE</th>
-                    <th>SERVIÇO</th>
-                    <th>VALOR</th>
-                    <th>STATUS</th>
-                  </tr>
-                </thead>
+                <StatCard
+                  icon={<Clock />}
+                  title="Pendentes"
+                  value="08"
+                  detail="Aguardando aprovação"
+                  color="yellow"
+                />
 
-                <tbody>
-                  {orcamentos.map((item) => (
-                    <tr key={item.numero}>
-                      <td>{item.numero}</td>
-                      <td>{item.cliente}</td>
-                      <td>{item.servico}</td>
-                      <td className="value">{item.valor}</td>
-                      <td>
-                        <span
-                          className={`status ${item.status.toLowerCase()}`}
-                        >
-                          {item.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                <StatCard
+                  icon={<CheckCircle2 />}
+                  title="Aprovados"
+                  value="12"
+                  detail="Orçamentos aprovados"
+                  color="blue"
+                />
 
-          <section className="bottom-card">
-            <div className="bottom-icon">
-              <TrendingUp size={25} />
-            </div>
-            <div>
-              <h3>Organize seus serviços com facilidade!</h3>
-              <p>
-                Crie orçamentos profissionais e mantenha seus
-                clientes sempre organizados.
-              </p>
-            </div>
-          </section>
+                <StatCard
+                  icon={<Wallet />}
+                  title="Total recebido"
+                  value="R$ 8.450"
+                  detail="Valores registrados"
+                  color="purple"
+                />
+              </div>
+
+              <section className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h2>Orçamentos recentes</h2>
+                    <p>Acompanhe seus últimos documentos.</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => abrirPagina("orcamentos")}
+                  >
+                    Ver todos
+                  </button>
+                </div>
+
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>NÚMERO</th>
+                        <th>CLIENTE</th>
+                        <th>SERVIÇO</th>
+                        <th>VALOR</th>
+                        <th>STATUS</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {orcamentos.map((item) => (
+                        <tr key={item.numero}>
+                          <td>{item.numero}</td>
+                          <td>{item.cliente}</td>
+                          <td>{item.servico}</td>
+                          <td className="value">{item.valor}</td>
+                          <td>
+                            <span
+                              className={`status ${item.status.toLowerCase()}`}
+                            >
+                              {item.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="bottom-card">
+                <div className="bottom-icon">
+                  <TrendingUp size={25} />
+                </div>
+
+                <div>
+                  <h3>
+                    Organize seus serviços com facilidade!
+                  </h3>
+
+                  <p>
+                    Crie orçamentos profissionais e mantenha seus
+                    clientes sempre organizados.
+                  </p>
+                </div>
+              </section>
+            </>
+          )}
         </section>
       </main>
     </div>
@@ -226,8 +296,11 @@ function StatCard({ icon, title, value, detail, color }) {
   return (
     <div className="stat-card">
       <div className={`stat-icon ${color}`}>{icon}</div>
+
       <span>{title}</span>
+
       <h2>{value}</h2>
+
       <small>{detail}</small>
     </div>
   );
