@@ -58,7 +58,7 @@ function moeda(valor) {
 function formatarData(data) {
   if (!data) return "Não informada";
 
-  const partes = data.slice(0, 10).split("-");
+  const partes = String(data).slice(0, 10).split("-");
 
   if (partes.length !== 3) return data;
 
@@ -86,13 +86,21 @@ function obterServico(item) {
 // ========================================
 
 function App() {
-  const [paginaAtual, setPaginaAtual] = useState("dashboard");
+  const [paginaAtual, setPaginaAtual] = useState(() => {
+    return window.location.hash === "#recibos"
+      ? "recibos"
+      : "dashboard";
+  });
+
   const [orcamentoSelecionado, setOrcamentoSelecionado] = useState(null);
   const [orcamentoEdicao, setOrcamentoEdicao] = useState(null);
 
   const [orcamentosSalvos, setOrcamentosSalvos] = useState(
     carregarOrcamentos
   );
+
+  // PESQUISA DO PAINEL
+  const [pesquisa, setPesquisa] = useState("");
 
   // ========================================
   // ATUALIZAR LISTA DE ORÇAMENTOS
@@ -113,17 +121,30 @@ function App() {
 
   function abrirPagina(pagina) {
     setPaginaAtual(pagina);
+
+    const rotas = {
+      dashboard: "#dashboard",
+      "lista-orcamentos": "#orcamentos",
+      orcamentos: "#orcamentos",
+      "detalhes-orcamento": "#orcamentos",
+      clientes: "#clientes",
+      recibos: "#recibos",
+    };
+
+    if (rotas[pagina]) {
+      window.location.hash = rotas[pagina];
+    }
   }
 
   function abrirOrcamento(orcamento) {
     setOrcamentoSelecionado(orcamento);
-    setPaginaAtual("detalhes-orcamento");
+    abrirPagina("detalhes-orcamento");
   }
 
   function voltarDashboard() {
     setOrcamentoSelecionado(null);
     setOrcamentoEdicao(null);
-    setPaginaAtual("dashboard");
+    abrirPagina("dashboard");
   }
 
   // ========================================
@@ -133,7 +154,7 @@ function App() {
   function editarOrcamento(orcamento) {
     setOrcamentoSelecionado(orcamento);
     setOrcamentoEdicao(orcamento);
-    setPaginaAtual("orcamentos");
+    abrirPagina("orcamentos");
   }
 
   // ========================================
@@ -148,22 +169,33 @@ function App() {
     let novaLista;
 
     if (existe) {
-      novaLista = orcamentosSalvos.map((item) =>
-        item.id === orcamento.id ? orcamento : item
-      );
+      novaLista = orcamentosSalvos.map((item) => {
+        if (item.id !== orcamento.id) return item;
+
+        return {
+          ...orcamento,
+          statusRecebimento: item.statusRecebimento,
+          valorRecebido: item.valorRecebido,
+          dataRecebimento: item.dataRecebimento,
+        };
+      });
     } else {
       novaLista = [...orcamentosSalvos, orcamento];
     }
 
+    const atualizado = novaLista.find(
+      (item) => item.id === orcamento.id
+    );
+
     atualizarLista(novaLista);
 
-    setOrcamentoSelecionado(orcamento);
+    setOrcamentoSelecionado(atualizado || orcamento);
     setOrcamentoEdicao(null);
-    setPaginaAtual("detalhes-orcamento");
+    abrirPagina("detalhes-orcamento");
   }
 
   // ========================================
-  // ALTERAR STATUS
+  // ALTERAR STATUS DO ORÇAMENTO
   // ========================================
 
   function alterarStatus(orcamento, novoStatus) {
@@ -181,6 +213,65 @@ function App() {
   }
 
   // ========================================
+  // REGISTRAR RECEBIMENTO INTEGRAL
+  // ========================================
+
+  function registrarRecebimento(orcamento) {
+    const valorFinal = Number(orcamento.total || 0);
+
+    if (valorFinal <= 0) {
+      alert(
+        "Este orçamento não possui um valor válido para recebimento."
+      );
+      return;
+    }
+
+    if (
+      (orcamento.statusRecebimento || "")
+        .trim()
+        .toLowerCase() === "recebido"
+    ) {
+      alert("Este orçamento já possui um recebimento registrado.");
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `Confirma o recebimento de ${moeda(valorFinal)} do orçamento ${orcamento.numero}?`
+    );
+
+    if (!confirmar) return;
+
+    const agora = new Date();
+
+    const dataRecebimento = [
+      agora.getFullYear(),
+      String(agora.getMonth() + 1).padStart(2, "0"),
+      String(agora.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    const atualizado = {
+      ...orcamento,
+      statusRecebimento: "Recebido",
+      valorRecebido: valorFinal,
+      dataRecebimento,
+    };
+
+    const novaLista = orcamentosSalvos.map((item) =>
+      item.id === orcamento.id ? atualizado : item
+    );
+
+    atualizarLista(novaLista);
+
+    if (orcamentoSelecionado?.id === orcamento.id) {
+      setOrcamentoSelecionado(atualizado);
+    }
+
+    alert(
+      `Recebimento registrado com sucesso!\n\nValor recebido: ${moeda(valorFinal)}`
+    );
+  }
+
+  // ========================================
   // EXCLUIR ORÇAMENTO
   // ========================================
 
@@ -193,7 +284,7 @@ function App() {
 
     setOrcamentoSelecionado(null);
     setOrcamentoEdicao(null);
-    setPaginaAtual("lista-orcamentos");
+    abrirPagina("lista-orcamentos");
   }
 
   // ========================================
@@ -217,6 +308,38 @@ function App() {
   const orcamentosRecentes = [...orcamentosOrdenados]
     .slice(-5)
     .reverse();
+
+  // ========================================
+  // PESQUISAR ORÇAMENTOS
+  // ========================================
+
+  const termoPesquisa = pesquisa.trim().toLowerCase();
+
+  const resultadosPesquisa = termoPesquisa
+    ? [...orcamentosSalvos]
+        .filter((item) => {
+          const cliente = String(item.cliente || "").toLowerCase();
+          const numero = String(item.numero || "").toLowerCase();
+          const servico = String(obterServico(item) || "").toLowerCase();
+
+          return (
+            cliente.includes(termoPesquisa) ||
+            numero.includes(termoPesquisa) ||
+            servico.includes(termoPesquisa)
+          );
+        })
+        .sort((a, b) => {
+          const numeroA = Number(
+            String(a.numero || "").replace(/\D/g, "")
+          );
+
+          const numeroB = Number(
+            String(b.numero || "").replace(/\D/g, "")
+          );
+
+          return numeroB - numeroA;
+        })
+    : orcamentosRecentes;
 
   const pendentes = orcamentosSalvos.filter(
     (item) =>
@@ -270,9 +393,11 @@ function App() {
 
           <a
             className={`menu-item ${
-              ["lista-orcamentos", "orcamentos", "detalhes-orcamento"].includes(
-                paginaAtual
-              )
+              [
+                "lista-orcamentos",
+                "orcamentos",
+                "detalhes-orcamento",
+              ].includes(paginaAtual)
                 ? "active"
                 : ""
             }`}
@@ -301,9 +426,18 @@ function App() {
             Clientes
           </a>
 
-          <a className="menu-item" href="#recibos">
+          <a
+            className={`menu-item ${
+              paginaAtual === "recibos" ? "active" : ""
+            }`}
+            href="#recibos"
+            onClick={(e) => {
+              e.preventDefault();
+              abrirPagina("recibos");
+            }}
+          >
             <Receipt size={19} />
-            Recibos
+            Recebimentos
           </a>
         </nav>
 
@@ -333,7 +467,25 @@ function App() {
 
           <div className="search-box">
             <Search size={18} />
-            <input placeholder="Pesquisar..." />
+
+            <input
+              type="search"
+              placeholder="Pesquisar cliente, orçamento ou serviço..."
+              value={pesquisa}
+              onChange={(e) => setPesquisa(e.target.value)}
+            />
+
+            {pesquisa && (
+              <button
+                type="button"
+                className="search-clear"
+                onClick={() => setPesquisa("")}
+                aria-label="Limpar pesquisa"
+                title="Limpar pesquisa"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
 
           <button
@@ -346,10 +498,7 @@ function App() {
         </header>
 
         <section className="content">
-
-          {/* ========================================
-              LISTA DE ORÇAMENTOS
-          ======================================== */}
+          {/* LISTA DE ORÇAMENTOS */}
 
           {paginaAtual === "lista-orcamentos" ? (
             <ListaOrcamentos
@@ -363,13 +512,7 @@ function App() {
               aoExcluir={excluirOrcamento}
               aoVoltar={voltarDashboard}
             />
-
           ) : paginaAtual === "orcamentos" ? (
-
-            /* ========================================
-               FORMULÁRIO DE ORÇAMENTO
-            ======================================== */
-
             <Orcamentos
               key={orcamentoEdicao?.id || "novo"}
               orcamentoEdicao={orcamentoEdicao}
@@ -377,42 +520,34 @@ function App() {
               aoVoltar={() => {
                 if (orcamentoEdicao) {
                   setOrcamentoEdicao(null);
-                  setPaginaAtual("detalhes-orcamento");
+                  abrirPagina("detalhes-orcamento");
                 } else {
-                  setPaginaAtual("lista-orcamentos");
+                  abrirPagina("lista-orcamentos");
                 }
               }}
             />
-
           ) : paginaAtual === "clientes" ? (
-
             <Clientes />
-
+          ) : paginaAtual === "recibos" ? (
+            <Recebimentos
+              orcamentos={orcamentosSalvos}
+              aoAbrir={abrirOrcamento}
+              aoRegistrarRecebimento={registrarRecebimento}
+            />
           ) : paginaAtual === "detalhes-orcamento" &&
             orcamentoSelecionado ? (
-
-            /* ========================================
-               DETALHES DO ORÇAMENTO
-            ======================================== */
-
             <DetalhesOrcamento
               orcamento={orcamentoSelecionado}
               aoVoltar={() => {
                 setOrcamentoSelecionado(null);
-                setPaginaAtual("lista-orcamentos");
+                abrirPagina("lista-orcamentos");
               }}
               aoEditar={() => editarOrcamento(orcamentoSelecionado)}
               aoAlterarStatus={(status) =>
                 alterarStatus(orcamentoSelecionado, status)
               }
             />
-
           ) : (
-
-            /* ========================================
-               DASHBOARD
-            ======================================== */
-
             <>
               <div className="welcome">
                 <div>
@@ -475,19 +610,28 @@ function App() {
               <section className="panel">
                 <div className="panel-header">
                   <div>
-                    <h2>Orçamentos recentes</h2>
+                    <h2>
+                      {termoPesquisa
+                        ? "Resultados da pesquisa"
+                        : "Orçamentos recentes"}
+                    </h2>
+
                     <p>
-                      Acompanhe seus últimos documentos.
+                      {termoPesquisa
+                        ? `${resultadosPesquisa.length} orçamento(s) encontrado(s).`
+                        : "Acompanhe seus últimos documentos."}
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => abrirPagina("lista-orcamentos")}
-                  >
-                    Ver todos
-                  </button>
+                  {!termoPesquisa && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => abrirPagina("lista-orcamentos")}
+                    >
+                      Ver todos
+                    </button>
+                  )}
                 </div>
 
                 <div className="table-container">
@@ -504,8 +648,8 @@ function App() {
                     </thead>
 
                     <tbody>
-                      {orcamentosRecentes.length > 0 ? (
-                        orcamentosRecentes.map((item) => (
+                      {resultadosPesquisa.length > 0 ? (
+                        resultadosPesquisa.map((item) => (
                           <tr key={item.id}>
                             <td>{item.numero}</td>
 
@@ -547,14 +691,18 @@ function App() {
                         <tr>
                           <td colSpan="6">
                             <div className="orcamentos-vazio">
-                              <FileText size={30} />
+                              <Search size={30} />
 
                               <strong>
-                                Nenhum orçamento cadastrado
+                                {termoPesquisa
+                                  ? "Nenhum resultado encontrado"
+                                  : "Nenhum orçamento cadastrado"}
                               </strong>
 
                               <span>
-                                Clique em Novo orçamento para começar.
+                                {termoPesquisa
+                                  ? "Verifique o nome do cliente ou tente outro termo."
+                                  : "Clique em Novo orçamento para começar."}
                               </span>
                             </div>
                           </td>
@@ -585,6 +733,258 @@ function App() {
           )}
         </section>
       </main>
+    </div>
+  );
+}
+
+// ========================================
+// TELA DE RECEBIMENTOS
+// ========================================
+
+function Recebimentos({
+  orcamentos,
+  aoAbrir,
+  aoRegistrarRecebimento,
+}) {
+  const aguardando = orcamentos.filter(
+    (item) =>
+      (item.status || "Pendente").trim().toLowerCase() === "aprovado" &&
+      (item.statusRecebimento || "Pendente").trim().toLowerCase() !== "recebido"
+  );
+
+  const recebidos = orcamentos.filter(
+    (item) =>
+      (item.status || "Pendente").trim().toLowerCase() === "aprovado" &&
+      (item.statusRecebimento || "").trim().toLowerCase() === "recebido"
+  );
+
+  const totalAReceber = aguardando.reduce(
+    (total, item) => total + Number(item.total || 0),
+    0
+  );
+
+  const totalRecebido = recebidos.reduce(
+    (total, item) =>
+      total + Number(item.valorRecebido || item.total || 0),
+    0
+  );
+
+  return (
+    <div className="orcamentos-page">
+      <div className="orcamentos-header">
+        <div>
+          <span className="clientes-label">
+            GESTÃO FINANCEIRA
+          </span>
+
+          <h1>Recebimentos</h1>
+
+          <p>
+            Acompanhe os valores pendentes e os recebimentos realizados.
+          </p>
+        </div>
+      </div>
+
+      <div className="stats">
+        <StatCard
+          icon={<Clock />}
+          title="Aguardando recebimento"
+          value={String(aguardando.length).padStart(2, "0")}
+          detail="Orçamentos aprovados"
+          color="yellow"
+        />
+
+        <StatCard
+          icon={<Wallet />}
+          title="Total a receber"
+          value={moeda(totalAReceber)}
+          detail="Valores com desconto aplicado"
+          color="green"
+        />
+
+        <StatCard
+          icon={<CheckCircle2 />}
+          title="Total recebido"
+          value={moeda(totalRecebido)}
+          detail={`${recebidos.length} recebimento(s) realizado(s)`}
+          color="blue"
+        />
+      </div>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Aguardando recebimento</h2>
+
+            <p>
+              {aguardando.length} orçamento(s) aguardando recebimento.
+            </p>
+          </div>
+        </div>
+
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>NÚMERO</th>
+                <th>CLIENTE</th>
+                <th>DATA DE EMISSÃO</th>
+                <th>VALOR FINAL</th>
+                <th>SITUAÇÃO</th>
+                <th>AÇÃO</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {aguardando.length > 0 ? (
+                aguardando.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.numero}</td>
+
+                    <td>
+                      {item.cliente || "Não informado"}
+                    </td>
+
+                    <td>
+                      {formatarData(item.dataEmissao)}
+                    </td>
+
+                    <td className="value">
+                      {moeda(item.total)}
+                    </td>
+
+                    <td>
+                      <span className="status pendente">
+                        Aguardando recebimento
+                      </span>
+                    </td>
+
+                    <td>
+                      <div className="orcamento-acoes">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => aoAbrir(item)}
+                        >
+                          <Eye size={16} />
+                          Abrir
+                        </button>
+
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => aoRegistrarRecebimento(item)}
+                        >
+                          <Check size={16} />
+                          Registrar recebimento
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="6">
+                    <div className="orcamentos-vazio">
+                      <Receipt size={30} />
+
+                      <strong>
+                        Nenhum recebimento pendente
+                      </strong>
+
+                      <span>
+                        Quando você aprovar um orçamento, ele aparecerá aqui.
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Recebimentos realizados</h2>
+
+            <p>
+              {recebidos.length} recebimento(s) registrado(s).
+            </p>
+          </div>
+        </div>
+
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>NÚMERO</th>
+                <th>CLIENTE</th>
+                <th>DATA DO RECEBIMENTO</th>
+                <th>VALOR RECEBIDO</th>
+                <th>SITUAÇÃO</th>
+                <th>AÇÃO</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {recebidos.length > 0 ? (
+                recebidos.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.numero}</td>
+
+                    <td>
+                      {item.cliente || "Não informado"}
+                    </td>
+
+                    <td>
+                      {formatarData(item.dataRecebimento)}
+                    </td>
+
+                    <td className="value">
+                      {moeda(item.valorRecebido || item.total)}
+                    </td>
+
+                    <td>
+                      <span className="status aprovado">
+                        Recebido
+                      </span>
+                    </td>
+
+                    <td>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => aoAbrir(item)}
+                      >
+                        <Eye size={16} />
+                        Abrir
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="6">
+                    <div className="orcamentos-vazio">
+                      <Wallet size={30} />
+
+                      <strong>
+                        Nenhum recebimento realizado
+                      </strong>
+
+                      <span>
+                        Os pagamentos registrados aparecerão neste histórico.
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
@@ -797,6 +1197,9 @@ function DetalhesOrcamento({
     orcamento.status || "Pendente"
   ).toLowerCase();
 
+  const recebimentoConcluido =
+    (orcamento.statusRecebimento || "").toLowerCase() === "recebido";
+
   return (
     <div className="orcamentos-page">
       <div className="orcamentos-header">
@@ -846,6 +1249,36 @@ function DetalhesOrcamento({
           </div>
         </div>
       </section>
+
+      {recebimentoConcluido && (
+        <section className="orcamento-panel">
+          <h2>
+            <CheckCircle2 size={19} />
+            Recebimento confirmado
+          </h2>
+
+          <div className="orcamento-grid">
+            <div>
+              <label>Situação do recebimento</label>
+              <span className="status aprovado">Recebido</span>
+            </div>
+
+            <div>
+              <label>Data do recebimento</label>
+              <strong>
+                {formatarData(orcamento.dataRecebimento)}
+              </strong>
+            </div>
+
+            <div>
+              <label>Valor recebido</label>
+              <strong>
+                {moeda(orcamento.valorRecebido)}
+              </strong>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="orcamento-panel">
         <h2>
