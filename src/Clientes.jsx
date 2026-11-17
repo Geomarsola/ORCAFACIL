@@ -1,5 +1,6 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import {
   Plus,
   Search,
@@ -12,26 +13,7 @@ import {
   MapPin,
 } from "lucide-react";
 
-const clientesIniciais = [
-  {
-    id: 1,
-    nome: "João da Silva",
-    telefone: "(14) 99999-1111",
-    email: "joao@email.com",
-    documento: "123.456.789-00",
-    endereco: "Lins - SP",
-    observacoes: "",
-  },
-  {
-    id: 2,
-    nome: "Maria Oliveira",
-    telefone: "(14) 98888-2222",
-    email: "maria@email.com",
-    documento: "987.654.321-00",
-    endereco: "Marília - SP",
-    observacoes: "",
-  },
-];
+const API = "http://localhost:3000/api/clientes";
 
 const formularioVazio = {
   nome: "",
@@ -43,29 +25,90 @@ const formularioVazio = {
 };
 
 function Clientes() {
-  const [clientes, setClientes] = useState(clientesIniciais);
+  const [clientes, setClientes] = useState([]);
   const [busca, setBusca] = useState("");
   const [modalAberto, setModalAberto] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
   const [formulario, setFormulario] = useState(formularioVazio);
 
+  const [carregando, setCarregando] = useState(true);
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+
+  // ========================================
+  // CARREGAR CLIENTES DO MYSQL
+  // ========================================
+
+  async function carregarClientes() {
+    try {
+      setCarregando(true);
+      setErro("");
+
+      const resposta = await fetch(API);
+
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        throw new Error(dados.mensagem || "Erro ao buscar clientes.");
+      }
+
+      setClientes(dados);
+    } catch (erro) {
+      console.error("Erro ao carregar clientes:", erro);
+      setErro(erro.message || "Não foi possível carregar os clientes.");
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  useEffect(() => {
+    carregarClientes();
+  }, []);
+
+  // ========================================
+  // BUSCA
+  // ========================================
+
   const clientesFiltrados = clientes.filter((cliente) =>
-    `${cliente.nome} ${cliente.telefone} ${cliente.email}`
+    `${cliente.nome || ""} ${cliente.telefone || ""} ${cliente.email || ""} ${cliente.documento || ""}`
       .toLowerCase()
       .includes(busca.toLowerCase())
   );
 
+  // ========================================
+  // ABRIR CADASTRO
+  // ========================================
+
   function abrirCadastro() {
     setClienteEditando(null);
-    setFormulario(formularioVazio);
+    setFormulario({ ...formularioVazio });
+    setErro("");
     setModalAberto(true);
   }
 
+  // ========================================
+  // EDITAR CLIENTE
+  // ========================================
+
   function editarCliente(cliente) {
     setClienteEditando(cliente.id);
-    setFormulario({ ...cliente });
+
+    setFormulario({
+      nome: cliente.nome || "",
+      telefone: cliente.telefone || "",
+      email: cliente.email || "",
+      documento: cliente.documento || "",
+      endereco: cliente.endereco || "",
+      observacoes: cliente.observacoes || "",
+    });
+
+    setErro("");
     setModalAberto(true);
   }
+
+  // ========================================
+  // ALTERAR CAMPOS
+  // ========================================
 
   function alterarCampo(evento) {
     const { name, value } = evento.target;
@@ -76,7 +119,11 @@ function Clientes() {
     }));
   }
 
-  function salvarCliente(evento) {
+  // ========================================
+  // SALVAR CLIENTE NO MYSQL
+  // ========================================
+
+  async function salvarCliente(evento) {
     evento.preventDefault();
 
     if (!formulario.nome.trim()) {
@@ -84,50 +131,125 @@ function Clientes() {
       return;
     }
 
-    if (clienteEditando) {
-      setClientes((atual) =>
-        atual.map((cliente) =>
-          cliente.id === clienteEditando
-            ? { ...formulario, id: clienteEditando }
-            : cliente
-        )
-      );
-    } else {
-      const novoCliente = {
-        ...formulario,
-        id: Date.now(),
-      };
+    try {
+      setSalvando(true);
+      setErro("");
 
-      setClientes((atual) => [...atual, novoCliente]);
+      const editando = clienteEditando !== null;
+
+      const url = editando
+        ? `${API}/${clienteEditando}`
+        : API;
+
+      const resposta = await fetch(url, {
+        method: editando ? "PUT" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(formulario),
+      });
+
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        throw new Error(dados.mensagem || "Erro ao salvar cliente.");
+      }
+
+      if (editando) {
+        setClientes((atual) =>
+          atual.map((cliente) =>
+            cliente.id === clienteEditando
+              ? dados.cliente
+              : cliente
+          )
+        );
+      } else {
+        setClientes((atual) => [
+          dados.cliente,
+          ...atual,
+        ]);
+      }
+
+      setModalAberto(false);
+      setFormulario({ ...formularioVazio });
+      setClienteEditando(null);
+
+      alert(dados.mensagem);
+    } catch (erro) {
+      console.error("Erro ao salvar cliente:", erro);
+      setErro(erro.message || "Não foi possível salvar o cliente.");
+    } finally {
+      setSalvando(false);
     }
-
-    setModalAberto(false);
-    setFormulario(formularioVazio);
-    setClienteEditando(null);
   }
 
-  function excluirCliente(id) {
+  // ========================================
+  // EXCLUIR CLIENTE DO MYSQL
+  // ========================================
+
+  async function excluirCliente(id) {
     const confirmar = window.confirm(
       "Deseja realmente excluir este cliente?"
     );
 
     if (!confirmar) return;
 
-    setClientes((atual) =>
-      atual.filter((cliente) => cliente.id !== id)
-    );
+    try {
+      const resposta = await fetch(`${API}/${id}`, {
+        method: "DELETE",
+      });
+
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        throw new Error(dados.mensagem || "Erro ao excluir cliente.");
+      }
+
+      setClientes((atual) =>
+        atual.filter((cliente) => cliente.id !== id)
+      );
+
+      alert(dados.mensagem);
+    } catch (erro) {
+      console.error("Erro ao excluir cliente:", erro);
+      alert(erro.message || "Não foi possível excluir o cliente.");
+    }
   }
+
+  // ========================================
+  // FECHAR MODAL
+  // ========================================
+
+  function fecharModal() {
+    if (salvando) return;
+
+    setModalAberto(false);
+    setFormulario({ ...formularioVazio });
+    setClienteEditando(null);
+    setErro("");
+  }
+
+  // ========================================
+  // TELA
+  // ========================================
 
   return (
     <div className="clientes-page">
       <div className="clientes-header">
         <div>
-          <span className="clientes-label">GESTÃO DE CLIENTES</span>
+          <span className="clientes-label">
+            GESTÃO DE CLIENTES
+          </span>
+
           <h1>Clientes</h1>
+
           <p>Gerencie os contatos dos seus clientes.</p>
         </div>
 
-        <button className="cliente-novo-btn" onClick={abrirCadastro}>
+        <button
+          className="cliente-novo-btn"
+          onClick={abrirCadastro}
+        >
           <Plus size={19} />
           Novo cliente
         </button>
@@ -153,6 +275,7 @@ function Clientes() {
 
           <div className="clientes-busca">
             <Search size={18} />
+
             <input
               type="text"
               placeholder="Buscar cliente..."
@@ -161,6 +284,15 @@ function Clientes() {
             />
           </div>
         </div>
+
+        {erro && (
+          <div className="clientes-vazio" role="alert">
+            {erro}
+            <button type="button" onClick={carregarClientes}>
+              Tentar novamente
+            </button>
+          </div>
+        )}
 
         <div className="clientes-tabela-container">
           <table className="clientes-tabela">
@@ -175,20 +307,37 @@ function Clientes() {
             </thead>
 
             <tbody>
-              {clientesFiltrados.map((cliente) => (
+              {carregando ? (
+                <tr>
+                  <td colSpan="5" className="clientes-vazio">
+                    Carregando clientes...
+                  </td>
+                </tr>
+              ) : clientesFiltrados.map((cliente) => (
                 <tr key={cliente.id}>
                   <td>
                     <strong>{cliente.nome}</strong>
-                    <small>{cliente.documento || "Sem documento"}</small>
+                    <small>
+                      {cliente.documento || "Sem documento"}
+                    </small>
                   </td>
 
-                  <td>{cliente.telefone || "Não informado"}</td>
-                  <td>{cliente.email || "Não informado"}</td>
-                  <td>{cliente.endereco || "Não informado"}</td>
+                  <td>
+                    {cliente.telefone || "Não informado"}
+                  </td>
+
+                  <td>
+                    {cliente.email || "Não informado"}
+                  </td>
+
+                  <td>
+                    {cliente.endereco || "Não informado"}
+                  </td>
 
                   <td>
                     <div className="cliente-acoes">
                       <button
+                        type="button"
                         title="Editar cliente"
                         onClick={() => editarCliente(cliente)}
                       >
@@ -196,6 +345,7 @@ function Clientes() {
                       </button>
 
                       <button
+                        type="button"
                         className="excluir"
                         title="Excluir cliente"
                         onClick={() => excluirCliente(cliente.id)}
@@ -207,13 +357,15 @@ function Clientes() {
                 </tr>
               ))}
 
-              {clientesFiltrados.length === 0 && (
-                <tr>
-                  <td colSpan="5" className="clientes-vazio">
-                    Nenhum cliente encontrado.
-                  </td>
-                </tr>
-              )}
+              {!carregando &&
+                clientesFiltrados.length === 0 &&
+                !erro && (
+                  <tr>
+                    <td colSpan="5" className="clientes-vazio">
+                      Nenhum cliente encontrado.
+                    </td>
+                  </tr>
+                )}
             </tbody>
           </table>
         </div>
@@ -225,14 +377,18 @@ function Clientes() {
             <div className="cliente-modal-header">
               <div>
                 <h2>
-                  {clienteEditando ? "Editar cliente" : "Novo cliente"}
+                  {clienteEditando !== null
+                    ? "Editar cliente"
+                    : "Novo cliente"}
                 </h2>
+
                 <p>Preencha os dados do cliente.</p>
               </div>
 
               <button
                 type="button"
-                onClick={() => setModalAberto(false)}
+                onClick={fecharModal}
+                disabled={salvando}
               >
                 <X size={21} />
               </button>
@@ -240,6 +396,7 @@ function Clientes() {
 
             <form onSubmit={salvarCliente}>
               <label>Nome completo *</label>
+
               <input
                 name="nome"
                 value={formulario.nome}
@@ -251,8 +408,10 @@ function Clientes() {
               <div className="cliente-form-grid">
                 <div>
                   <label>Telefone / WhatsApp</label>
+
                   <div className="cliente-input-icon">
                     <Phone size={17} />
+
                     <input
                       name="telefone"
                       value={formulario.telefone}
@@ -264,6 +423,7 @@ function Clientes() {
 
                 <div>
                   <label>CPF / CNPJ</label>
+
                   <input
                     name="documento"
                     value={formulario.documento}
@@ -274,8 +434,10 @@ function Clientes() {
               </div>
 
               <label>E-mail</label>
+
               <div className="cliente-input-icon">
                 <Mail size={17} />
+
                 <input
                   type="email"
                   name="email"
@@ -286,8 +448,10 @@ function Clientes() {
               </div>
 
               <label>Endereço</label>
+
               <div className="cliente-input-icon">
                 <MapPin size={17} />
+
                 <input
                   name="endereco"
                   value={formulario.endereco}
@@ -297,6 +461,7 @@ function Clientes() {
               </div>
 
               <label>Observações</label>
+
               <textarea
                 name="observacoes"
                 value={formulario.observacoes}
@@ -305,17 +470,32 @@ function Clientes() {
                 rows="3"
               />
 
+              {erro && (
+                <p role="alert" className="clientes-vazio">
+                  {erro}
+                </p>
+              )}
+
               <div className="cliente-modal-actions">
                 <button
                   type="button"
                   className="cliente-cancelar"
-                  onClick={() => setModalAberto(false)}
+                  onClick={fecharModal}
+                  disabled={salvando}
                 >
                   Cancelar
                 </button>
 
-                <button type="submit" className="cliente-salvar">
-                  {clienteEditando ? "Salvar alterações" : "Cadastrar cliente"}
+                <button
+                  type="submit"
+                  className="cliente-salvar"
+                  disabled={salvando}
+                >
+                  {salvando
+                    ? "Salvando..."
+                    : clienteEditando !== null
+                      ? "Salvar alterações"
+                      : "Cadastrar cliente"}
                 </button>
               </div>
             </form>
