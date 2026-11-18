@@ -24,12 +24,38 @@ const formularioVazio = {
   observacoes: "",
 };
 
+// ========================================
+// TRATAMENTO PADRÃO DAS RESPOSTAS
+// ========================================
+
+async function lerResposta(resposta) {
+  const texto = await resposta.text();
+
+  let dados = {};
+
+  try {
+    dados = texto ? JSON.parse(texto) : {};
+  } catch {
+    throw new Error("O servidor retornou uma resposta inválida.");
+  }
+
+  if (!resposta.ok) {
+    throw new Error(
+      dados.mensagem ||
+      dados.erro ||
+      "Não foi possível concluir a operação."
+    );
+  }
+
+  return dados;
+}
+
 function Clientes() {
   const [clientes, setClientes] = useState([]);
   const [busca, setBusca] = useState("");
   const [modalAberto, setModalAberto] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
-  const [formulario, setFormulario] = useState(formularioVazio);
+  const [formulario, setFormulario] = useState({ ...formularioVazio });
 
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
@@ -44,18 +70,21 @@ function Clientes() {
       setCarregando(true);
       setErro("");
 
-      const resposta = await fetch(API);
+      const resposta = await fetch(API, {
+        method: "GET",
+        credentials: "include",
+      });
 
-      const dados = await resposta.json();
+      const dados = await lerResposta(resposta);
 
-      if (!resposta.ok) {
-        throw new Error(dados.mensagem || "Erro ao buscar clientes.");
-      }
-
-      setClientes(dados);
+      setClientes(Array.isArray(dados) ? dados : []);
     } catch (erro) {
       console.error("Erro ao carregar clientes:", erro);
-      setErro(erro.message || "Não foi possível carregar os clientes.");
+
+      setErro(
+        erro.message ||
+        "Não foi possível carregar os clientes."
+      );
     } finally {
       setCarregando(false);
     }
@@ -127,7 +156,7 @@ function Clientes() {
     evento.preventDefault();
 
     if (!formulario.nome.trim()) {
-      alert("Informe o nome do cliente.");
+      setErro("Informe o nome do cliente.");
       return;
     }
 
@@ -146,13 +175,19 @@ function Clientes() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(formulario),
+        credentials: "include",
+        body: JSON.stringify({
+          ...formulario,
+          nome: formulario.nome.trim(),
+        }),
       });
 
-      const dados = await resposta.json();
+      const dados = await lerResposta(resposta);
 
-      if (!resposta.ok) {
-        throw new Error(dados.mensagem || "Erro ao salvar cliente.");
+      if (!dados.cliente) {
+        throw new Error(
+          "O servidor não retornou os dados do cliente."
+        );
       }
 
       if (editando) {
@@ -174,10 +209,14 @@ function Clientes() {
       setFormulario({ ...formularioVazio });
       setClienteEditando(null);
 
-      alert(dados.mensagem);
+      alert(dados.mensagem || "Cliente salvo com sucesso!");
     } catch (erro) {
       console.error("Erro ao salvar cliente:", erro);
-      setErro(erro.message || "Não foi possível salvar o cliente.");
+
+      setErro(
+        erro.message ||
+        "Não foi possível salvar o cliente."
+      );
     } finally {
       setSalvando(false);
     }
@@ -197,22 +236,23 @@ function Clientes() {
     try {
       const resposta = await fetch(`${API}/${id}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
-      const dados = await resposta.json();
-
-      if (!resposta.ok) {
-        throw new Error(dados.mensagem || "Erro ao excluir cliente.");
-      }
+      const dados = await lerResposta(resposta);
 
       setClientes((atual) =>
         atual.filter((cliente) => cliente.id !== id)
       );
 
-      alert(dados.mensagem);
+      alert(dados.mensagem || "Cliente excluído com sucesso!");
     } catch (erro) {
       console.error("Erro ao excluir cliente:", erro);
-      alert(erro.message || "Não foi possível excluir o cliente.");
+
+      alert(
+        erro.message ||
+        "Não foi possível excluir o cliente."
+      );
     }
   }
 
@@ -249,6 +289,7 @@ function Clientes() {
         <button
           className="cliente-novo-btn"
           onClick={abrirCadastro}
+          type="button"
         >
           <Plus size={19} />
           Novo cliente
@@ -285,10 +326,15 @@ function Clientes() {
           </div>
         </div>
 
-        {erro && (
+        {erro && !modalAberto && (
           <div className="clientes-vazio" role="alert">
             {erro}
-            <button type="button" onClick={carregarClientes}>
+
+            <button
+              type="button"
+              onClick={carregarClientes}
+              disabled={carregando}
+            >
               Tentar novamente
             </button>
           </div>
@@ -317,6 +363,7 @@ function Clientes() {
                 <tr key={cliente.id}>
                   <td>
                     <strong>{cliente.nome}</strong>
+
                     <small>
                       {cliente.documento || "Sem documento"}
                     </small>

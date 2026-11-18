@@ -11,18 +11,62 @@ import {
 
 const API_CLIENTES = "http://localhost:3000/api/clientes";
 
+const FORMAS_PAGAMENTO = [
+  "Pix",
+  "Dinheiro",
+  "Cartão de crédito",
+  "Cartão de débito",
+  "Transferência bancária",
+  "Boleto bancário",
+  "A combinar",
+  "Outra condição",
+];
+
 const novoItem = () => ({
   id: Date.now() + Math.random(),
   descricao: "",
-  quantidade: 1,
+  quantidade: "1",
   valor: "",
 });
+
+// ========================================
+// TRATAR RESPOSTA DA API
+// ========================================
+
+async function lerResposta(resposta) {
+  const texto = await resposta.text();
+
+  let dados = {};
+
+  try {
+    dados = texto ? JSON.parse(texto) : {};
+  } catch {
+    throw new Error("O servidor retornou uma resposta inválida.");
+  }
+
+  if (!resposta.ok) {
+    throw new Error(
+      dados.mensagem ||
+      dados.erro ||
+      "Não foi possível concluir a operação."
+    );
+  }
+
+  return dados;
+}
 
 function Orcamentos({
   aoVoltar,
   aoSalvar,
   orcamentoEdicao,
 }) {
+  const formaPagamentoInicial = String(
+    orcamentoEdicao?.formaPagamento || "A combinar"
+  );
+
+  const formaPagamentoConhecida =
+    FORMAS_PAGAMENTO.includes(formaPagamentoInicial);
+
   const [clientes, setClientes] = useState([]);
   const [carregandoClientes, setCarregandoClientes] = useState(true);
   const [erroClientes, setErroClientes] = useState("");
@@ -42,11 +86,23 @@ function Orcamentos({
     String(orcamentoEdicao?.validade || "7")
   );
 
+  const [formaPagamento, setFormaPagamento] = useState(
+    formaPagamentoConhecida
+      ? formaPagamentoInicial
+      : "Outra condição"
+  );
+
+  const [outraFormaPagamento, setOutraFormaPagamento] = useState(
+    formaPagamentoConhecida ? "" : formaPagamentoInicial
+  );
+
   const [itens, setItens] = useState(
     orcamentoEdicao?.itens?.length
       ? orcamentoEdicao.itens.map((item) => ({
           ...item,
           id: item.id || Date.now() + Math.random(),
+          quantidade: String(item.quantidade ?? 1),
+          valor: String(item.valor ?? item.valor_unitario ?? ""),
         }))
       : [novoItem()]
   );
@@ -68,20 +124,19 @@ function Orcamentos({
       setCarregandoClientes(true);
       setErroClientes("");
 
-      const resposta = await fetch(API_CLIENTES);
-      const dados = await resposta.json();
+      const resposta = await fetch(API_CLIENTES, {
+        method: "GET",
+        credentials: "include",
+      });
 
-      if (!resposta.ok) {
-        throw new Error(
-          dados.mensagem || "Não foi possível carregar os clientes."
-        );
-      }
+      const dados = await lerResposta(resposta);
 
-      setClientes(dados);
+      setClientes(Array.isArray(dados) ? dados : []);
     } catch (erro) {
       console.error("Erro ao carregar clientes:", erro);
+
       setErroClientes(
-        erro.message || "Erro ao buscar clientes."
+        erro.message || "Não foi possível carregar os clientes."
       );
     } finally {
       setCarregandoClientes(false);
@@ -104,9 +159,11 @@ function Orcamentos({
     0
   );
 
+  const descontoNumerico = Number(desconto || 0);
+
   const total = Math.max(
     0,
-    subtotal - Number(desconto || 0)
+    subtotal - descontoNumerico
   );
 
   // ========================================
@@ -150,13 +207,38 @@ function Orcamentos({
   function salvarOrcamento(evento) {
     evento.preventDefault();
 
+    if (carregandoClientes) {
+      alert("Aguarde o carregamento dos clientes.");
+      return;
+    }
+
+    if (erroClientes) {
+      alert("Não foi possível carregar os clientes. Tente novamente.");
+      return;
+    }
+
     if (clientes.length === 0) {
-      alert("Cadastre pelo menos um cliente antes de criar um orçamento.");
+      alert(
+        "Cadastre pelo menos um cliente antes de criar um orçamento."
+      );
       return;
     }
 
     if (!cliente) {
       alert("Selecione um cliente.");
+      return;
+    }
+
+    if (!dataEmissao) {
+      alert("Informe a data de emissão.");
+      return;
+    }
+
+    if (
+      !Number.isFinite(Number(validade)) ||
+      Number(validade) <= 0
+    ) {
+      alert("Informe um prazo de validade válido.");
       return;
     }
 
@@ -168,16 +250,36 @@ function Orcamentos({
     if (
       itens.some(
         (item) =>
+          !Number.isFinite(Number(item.quantidade)) ||
           Number(item.quantidade) <= 0 ||
+          !Number.isFinite(Number(item.valor)) ||
           Number(item.valor) < 0
       )
     ) {
-      alert("Informe quantidades maiores que zero e valores válidos.");
+      alert(
+        "Informe quantidades maiores que zero e valores válidos."
+      );
       return;
     }
 
-    if (Number(desconto) < 0) {
-      alert("O desconto não pode ser negativo.");
+    if (
+      !Number.isFinite(descontoNumerico) ||
+      descontoNumerico < 0
+    ) {
+      alert("Informe um desconto válido.");
+      return;
+    }
+
+    if (descontoNumerico > subtotal) {
+      alert("O desconto não pode ser maior que o subtotal.");
+      return;
+    }
+
+    if (
+      formaPagamento === "Outra condição" &&
+      !outraFormaPagamento.trim()
+    ) {
+      alert("Descreva a outra condição de pagamento.");
       return;
     }
 
@@ -190,6 +292,7 @@ function Orcamentos({
       return;
     }
 
+    // Mantém a numeração atual dos orçamentos.
     const orcamentosSalvos = JSON.parse(
       localStorage.getItem("orcamentos") || "[]"
     );
@@ -222,9 +325,17 @@ function Orcamentos({
       emailCliente: clienteSelecionado.email || "",
       dataEmissao,
       validade,
-      itens,
+      formaPagamento:
+        formaPagamento === "Outra condição"
+          ? outraFormaPagamento.trim()
+          : formaPagamento,
+      itens: itens.map((item) => ({
+        ...item,
+        quantidade: Number(item.quantidade),
+        valor: Number(item.valor),
+      })),
       subtotal,
-      desconto: Number(desconto || 0),
+      desconto: descontoNumerico,
       total,
       observacoes,
       status: orcamentoEdicao?.status || "Pendente",
@@ -233,12 +344,6 @@ function Orcamentos({
     if (aoSalvar) {
       aoSalvar(novoOrcamento);
     }
-
-    alert(
-      orcamentoEdicao
-        ? `Orçamento ${numero} atualizado com sucesso!`
-        : `Orçamento ${numero} criado com sucesso!`
-    );
   }
 
   // ========================================
@@ -337,6 +442,7 @@ function Orcamentos({
                   <button
                     type="button"
                     onClick={carregarClientes}
+                    disabled={carregandoClientes}
                   >
                     Tentar novamente
                   </button>
@@ -380,6 +486,40 @@ function Orcamentos({
                 <option value="60">60 dias</option>
               </select>
             </div>
+
+            <div>
+              <label>Forma de pagamento *</label>
+
+              <select
+                value={formaPagamento}
+                onChange={(evento) =>
+                  setFormaPagamento(evento.target.value)
+                }
+                required
+              >
+                {FORMAS_PAGAMENTO.map((forma) => (
+                  <option key={forma} value={forma}>
+                    {forma}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {formaPagamento === "Outra condição" && (
+              <div>
+                <label>Descreva a condição de pagamento *</label>
+
+                <input
+                  type="text"
+                  value={outraFormaPagamento}
+                  onChange={(evento) =>
+                    setOutraFormaPagamento(evento.target.value)
+                  }
+                  placeholder="Ex.: Entrada de 50% e restante na entrega"
+                  required
+                />
+              </div>
+            )}
           </div>
         </section>
 
@@ -514,6 +654,7 @@ function Orcamentos({
               <input
                 type="number"
                 min="0"
+                max={subtotal}
                 step="0.01"
                 value={desconto}
                 onChange={(evento) =>
@@ -538,7 +679,7 @@ function Orcamentos({
             onChange={(evento) =>
               setObservacoes(evento.target.value)
             }
-            placeholder="Condições de pagamento, detalhes do serviço..."
+            placeholder="Detalhes adicionais sobre o orçamento..."
           />
         </section>
 
@@ -561,6 +702,7 @@ function Orcamentos({
             }
           >
             <FileText size={18} />
+
             {orcamentoEdicao
               ? "Salvar alterações"
               : "Salvar orçamento"}

@@ -1,10 +1,11 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
 import Clientes from "./Clientes";
 import Orcamentos from "./Orcamentos";
 import ListaOrcamentos from "./ListaOrcamentos";
+import Administracao from "./Administracao";
 
 import {
   LayoutDashboard,
@@ -26,26 +27,50 @@ import {
   Pencil,
   Check,
   X,
+  Building2,
+  Save,
 } from "lucide-react";
 
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 // ========================================
-// FUNÇÕES AUXILIARES
+// API E FUNÇÕES AUXILIARES
 // ========================================
 
-function carregarOrcamentos() {
+const API_URL = "http://localhost:3000/api";
+
+async function requisicaoAPI(url, opcoes = {}) {
+  const resposta = await fetch(`${API_URL}${url}`, {
+    ...opcoes,
+    credentials: "include",
+    headers: {
+      ...(opcoes.body ? { "Content-Type": "application/json" } : {}),
+      ...opcoes.headers,
+    },
+  });
+
+  const texto = await resposta.text();
+  let dados = {};
+
   try {
-    const dados = JSON.parse(
-      localStorage.getItem("orcamentos") || "[]"
+    dados = texto ? JSON.parse(texto) : {};
+  } catch {
+    throw new Error("O servidor retornou uma resposta inválida.");
+  }
+
+  if (!resposta.ok) {
+    const erro = new Error(
+      dados.mensagem || "Não foi possível realizar a operação."
     );
 
-    return Array.isArray(dados) ? dados : [];
-  } catch (erro) {
-    console.error("Erro ao carregar orçamentos:", erro);
-    return [];
+    erro.status = resposta.status;
+    erro.dados = dados;
+
+    throw erro;
   }
+
+  return dados;
 }
 
 function moeda(valor) {
@@ -81,38 +106,295 @@ function obterServico(item) {
   return `${primeiroServico} + ${item.itens.length - 1} item(ns)`;
 }
 
+function converterConfiguracoesBanco(dados = {}) {
+  return {
+    nomeEmpresa: dados.nome_empresa || "",
+    documento: dados.documento || "",
+    telefone: dados.telefone || "",
+    email: dados.email || "",
+    endereco: dados.endereco || "",
+    validade: String(dados.validade_padrao_dias || 7),
+    pagamento: dados.condicoes_pagamento || "",
+    observacoes: dados.observacoes_padrao || "",
+  };
+}
+
+function montarDadosOrcamento(orcamento, status) {
+  return {
+    clienteId: Number(orcamento.clienteId),
+    dataEmissao: String(orcamento.dataEmissao || "").slice(0, 10),
+    validade: Number(orcamento.validade || 7),
+    desconto: Number(orcamento.desconto || 0),
+    total: Number(orcamento.total || 0),
+    status: status || orcamento.status || "Pendente",
+    observacoes: orcamento.observacoes || "",
+    formaPagamento: orcamento.formaPagamento || "",
+    itens: (orcamento.itens || []).map((item) => ({
+      descricao: item.descricao,
+      quantidade: Number(item.quantidade),
+      valor: Number(item.valor || 0),
+    })),
+  };
+}
+
 // ========================================
 // COMPONENTE PRINCIPAL
 // ========================================
 
 function App() {
   const [paginaAtual, setPaginaAtual] = useState(() => {
-    return window.location.hash === "#recibos"
-      ? "recibos"
-      : "dashboard";
+    const hash = window.location.hash;
+
+    if (hash === "#recibos") return "recibos";
+    if (hash === "#configuracoes") return "configuracoes";
+    if (hash === "#clientes") return "clientes";
+    if (hash === "#orcamentos") return "lista-orcamentos";
+    if (hash === "#usuarios") return "usuarios";
+
+    return "dashboard";
   });
 
   const [orcamentoSelecionado, setOrcamentoSelecionado] = useState(null);
   const [orcamentoEdicao, setOrcamentoEdicao] = useState(null);
 
-  const [orcamentosSalvos, setOrcamentosSalvos] = useState(
-    carregarOrcamentos
-  );
-
-  // PESQUISA DO PAINEL
+  const [orcamentosSalvos, setOrcamentosSalvos] = useState([]);
+  const [configuracoes, setConfiguracoes] = useState({});
   const [pesquisa, setPesquisa] = useState("");
 
+  const [usuario, setUsuario] = useState(null);
+  const [verificandoSessao, setVerificandoSessao] = useState(true);
+  const [carregandoDados, setCarregandoDados] = useState(false);
+  const [assinaturaBloqueada, setAssinaturaBloqueada] = useState(false);
+
+  const ehAdmin = usuario?.perfil === "admin";
+
   // ========================================
-  // ATUALIZAR LISTA DE ORÇAMENTOS
+  // VERIFICAR SESSÃO
   // ========================================
 
-  function atualizarLista(novosOrcamentos) {
-    localStorage.setItem(
-      "orcamentos",
-      JSON.stringify(novosOrcamentos)
-    );
+  useEffect(() => {
+    async function verificarLogin() {
+      try {
+        const dados = await requisicaoAPI("/me");
 
-    setOrcamentosSalvos(novosOrcamentos);
+        if (dados.autenticado && dados.usuario) {
+          setUsuario(dados.usuario);
+        } else {
+          setUsuario(null);
+        }
+      } catch (erro) {
+        console.error("Erro ao verificar sessão:", erro);
+        setUsuario(null);
+      } finally {
+        setVerificandoSessao(false);
+      }
+    }
+
+    verificarLogin();
+  }, []);
+
+  // ========================================
+  // SEPARAR ACESSO ADMINISTRADOR E CLIENTE
+  // ========================================
+
+  useEffect(() => {
+    if (!usuario) return;
+
+    if (usuario.perfil === "admin") {
+      setPaginaAtual("usuarios");
+      window.location.hash = "#usuarios";
+
+      setOrcamentosSalvos([]);
+      setConfiguracoes({});
+      setOrcamentoSelecionado(null);
+      setOrcamentoEdicao(null);
+      setPesquisa("");
+      return;
+    }
+
+    // Cliente não pode acessar a área administrativa.
+    if (paginaAtual === "usuarios") {
+      setPaginaAtual("dashboard");
+      window.location.hash = "#dashboard";
+    }
+  }, [usuario, paginaAtual]);
+
+  // ========================================
+  // CARREGAR DADOS DO CLIENTE NO MYSQL
+  // ========================================
+
+  useEffect(() => {
+    if (!usuario || usuario.perfil === "admin" || assinaturaBloqueada) {
+      setOrcamentosSalvos([]);
+      setConfiguracoes({});
+      setCarregandoDados(false);
+      return;
+    }
+
+    let ativo = true;
+
+    async function carregarDados() {
+      setCarregandoDados(true);
+
+      try {
+        const [orcamentos, respostaConfiguracoes] = await Promise.all([
+          requisicaoAPI("/orcamentos"),
+          requisicaoAPI("/configuracoes"),
+        ]);
+
+        if (!ativo) return;
+
+        setOrcamentosSalvos(
+          Array.isArray(orcamentos) ? orcamentos : []
+        );
+
+        setConfiguracoes(
+          converterConfiguracoesBanco(
+            respostaConfiguracoes.configuracoes || {}
+          )
+        );
+      } catch (erro) {
+        console.error("Erro ao carregar dados:", erro);
+
+        if (ativo) {
+          if (
+            erro.status === 403 &&
+            erro.dados?.assinatura_bloqueada
+          ) {
+            setAssinaturaBloqueada(true);
+
+            setUsuario((anterior) => {
+              const statusAssinatura =
+                erro.dados.status_assinatura ||
+                anterior.status_assinatura;
+
+              if (statusAssinatura === anterior.status_assinatura) {
+                return anterior;
+              }
+
+              return {
+                ...anterior,
+                status_assinatura: statusAssinatura,
+              };
+            });
+
+            return;
+          }
+
+          alert(
+            erro.message ||
+              "Não foi possível carregar os dados do sistema."
+          );
+        }
+      } finally {
+        if (ativo) setCarregandoDados(false);
+      }
+    }
+
+    carregarDados();
+
+    return () => {
+      ativo = false;
+    };
+  }, [usuario, assinaturaBloqueada]);
+
+  async function recarregarOrcamentos() {
+    if (ehAdmin) return [];
+
+    const dados = await requisicaoAPI("/orcamentos");
+    const lista = Array.isArray(dados) ? dados : [];
+
+    setOrcamentosSalvos(lista);
+
+    return lista;
+  }
+
+  // ========================================
+  // LOGIN
+  // ========================================
+
+  async function realizarLogin(email, senha) {
+    await requisicaoAPI("/login", {
+      method: "POST",
+      body: JSON.stringify({ email, senha }),
+    });
+
+    // Busca os dados completos do usuário, incluindo o plano.
+    const sessao = await requisicaoAPI("/me");
+
+    if (!sessao.autenticado || !sessao.usuario) {
+      throw new Error("Não foi possível carregar os dados da sua conta.");
+    }
+
+    const usuarioLogado = sessao.usuario;
+
+    setUsuario(usuarioLogado);
+    setAssinaturaBloqueada(false);
+
+    if (usuarioLogado.perfil === "admin") {
+      setPaginaAtual("usuarios");
+      window.location.hash = "#usuarios";
+    } else {
+      setPaginaAtual("dashboard");
+      window.location.hash = "#dashboard";
+    }
+  }
+
+  // ========================================
+  // LOGOUT
+  // ========================================
+
+  async function realizarLogout() {
+    try {
+      await requisicaoAPI("/logout", {
+        method: "POST",
+      });
+    } catch (erro) {
+      console.error("Erro ao sair:", erro);
+    } finally {
+      setUsuario(null);
+      setAssinaturaBloqueada(false);
+      setPaginaAtual("dashboard");
+      setOrcamentoSelecionado(null);
+      setOrcamentoEdicao(null);
+      setOrcamentosSalvos([]);
+      setConfiguracoes({});
+      setPesquisa("");
+
+      window.location.hash = "#dashboard";
+    }
+  }
+
+  // ========================================
+  // SALVAR CONFIGURAÇÕES NO MYSQL
+  // ========================================
+
+  async function salvarConfiguracoes(novasConfiguracoes) {
+    try {
+      await requisicaoAPI("/configuracoes", {
+        method: "PUT",
+        body: JSON.stringify({
+          nome_empresa: novasConfiguracoes.nomeEmpresa || "",
+          documento: novasConfiguracoes.documento || "",
+          telefone: novasConfiguracoes.telefone || "",
+          email: novasConfiguracoes.email || "",
+          endereco: novasConfiguracoes.endereco || "",
+          validade_padrao_dias: Number(
+            novasConfiguracoes.validade || 7
+          ),
+          condicoes_pagamento: novasConfiguracoes.pagamento || "",
+          observacoes_padrao: novasConfiguracoes.observacoes || "",
+        }),
+      });
+
+      setConfiguracoes(novasConfiguracoes);
+
+      return true;
+    } catch (erro) {
+      console.error("Erro ao salvar configurações:", erro);
+      alert(erro.message || "Não foi possível salvar as configurações.");
+      throw erro;
+    }
   }
 
   // ========================================
@@ -120,6 +402,20 @@ function App() {
   // ========================================
 
   function abrirPagina(pagina) {
+    // Administrador só pode acessar a administração.
+    if (ehAdmin && pagina !== "usuarios") {
+      setPaginaAtual("usuarios");
+      window.location.hash = "#usuarios";
+      return;
+    }
+
+    // Cliente não pode acessar a administração.
+    if (!ehAdmin && pagina === "usuarios") {
+      setPaginaAtual("dashboard");
+      window.location.hash = "#dashboard";
+      return;
+    }
+
     setPaginaAtual(pagina);
 
     const rotas = {
@@ -129,6 +425,8 @@ function App() {
       "detalhes-orcamento": "#orcamentos",
       clientes: "#clientes",
       recibos: "#recibos",
+      configuracoes: "#configuracoes",
+      usuarios: "#usuarios",
     };
 
     if (rotas[pagina]) {
@@ -158,65 +456,99 @@ function App() {
   }
 
   // ========================================
-  // SALVAR ORÇAMENTO
+  // SALVAR ORÇAMENTO NO MYSQL
   // ========================================
 
-  function salvarOrcamento(orcamento) {
-    const existe = orcamentosSalvos.some(
-      (item) => item.id === orcamento.id
-    );
+  async function salvarOrcamento(orcamento) {
+    try {
+      const estaEditando = Boolean(orcamentoEdicao?.id);
+      const dadosOrcamento = montarDadosOrcamento(orcamento);
 
-    let novaLista;
+      if (!dadosOrcamento.clienteId) {
+        alert("Selecione um cliente válido para o orçamento.");
+        return;
+      }
 
-    if (existe) {
-      novaLista = orcamentosSalvos.map((item) => {
-        if (item.id !== orcamento.id) return item;
+      if (!dadosOrcamento.dataEmissao) {
+        alert("Informe a data de emissão do orçamento.");
+        return;
+      }
 
-        return {
-          ...orcamento,
-          statusRecebimento: item.statusRecebimento,
-          valorRecebido: item.valorRecebido,
-          dataRecebimento: item.dataRecebimento,
-        };
-      });
-    } else {
-      novaLista = [...orcamentosSalvos, orcamento];
+      if (!dadosOrcamento.itens.length) {
+        alert("Adicione pelo menos um item ao orçamento.");
+        return;
+      }
+
+      let resposta;
+
+      if (estaEditando) {
+        resposta = await requisicaoAPI(
+          `/orcamentos/${orcamentoEdicao.id}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(dadosOrcamento),
+          }
+        );
+      } else {
+        resposta = await requisicaoAPI("/orcamentos", {
+          method: "POST",
+          body: JSON.stringify(dadosOrcamento),
+        });
+      }
+
+      const listaAtualizada = await recarregarOrcamentos();
+
+      const idSalvo = estaEditando
+        ? orcamentoEdicao.id
+        : resposta.id;
+
+      const atualizado = listaAtualizada.find(
+        (item) => String(item.id) === String(idSalvo)
+      );
+
+      setOrcamentoSelecionado(atualizado || null);
+      setOrcamentoEdicao(null);
+      abrirPagina("detalhes-orcamento");
+    } catch (erro) {
+      console.error("Erro ao salvar orçamento:", erro);
+      alert(erro.message || "Não foi possível salvar o orçamento.");
     }
-
-    const atualizado = novaLista.find(
-      (item) => item.id === orcamento.id
-    );
-
-    atualizarLista(novaLista);
-
-    setOrcamentoSelecionado(atualizado || orcamento);
-    setOrcamentoEdicao(null);
-    abrirPagina("detalhes-orcamento");
   }
 
   // ========================================
   // ALTERAR STATUS DO ORÇAMENTO
   // ========================================
 
-  function alterarStatus(orcamento, novoStatus) {
-    const atualizado = {
-      ...orcamento,
-      status: novoStatus,
-    };
+  async function alterarStatus(orcamento, novoStatus) {
+    try {
+      const dadosOrcamento = montarDadosOrcamento(
+        orcamento,
+        novoStatus
+      );
 
-    const novaLista = orcamentosSalvos.map((item) =>
-      item.id === orcamento.id ? atualizado : item
-    );
+      await requisicaoAPI(`/orcamentos/${orcamento.id}`, {
+        method: "PUT",
+        body: JSON.stringify(dadosOrcamento),
+      });
 
-    atualizarLista(novaLista);
-    setOrcamentoSelecionado(atualizado);
+      const listaAtualizada = await recarregarOrcamentos();
+
+      const atualizado = listaAtualizada.find(
+        (item) => String(item.id) === String(orcamento.id)
+      );
+
+      setOrcamentoSelecionado(atualizado || null);
+    } catch (erro) {
+      console.error("Erro ao alterar status:", erro);
+      alert(erro.message || "Não foi possível alterar o status.");
+    }
   }
 
   // ========================================
-  // REGISTRAR RECEBIMENTO INTEGRAL
+  // REGISTRAR RECEBIMENTO
   // ========================================
 
-  function registrarRecebimento(orcamento) {
+  async function registrarRecebimento(orcamento) {
     const valorFinal = Number(orcamento.total || 0);
 
     if (valorFinal <= 0) {
@@ -241,50 +573,61 @@ function App() {
 
     if (!confirmar) return;
 
-    const agora = new Date();
+    try {
+      await requisicaoAPI(
+        `/orcamentos/${orcamento.id}/recebimento`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            valorRecebido: valorFinal,
+          }),
+        }
+      );
 
-    const dataRecebimento = [
-      agora.getFullYear(),
-      String(agora.getMonth() + 1).padStart(2, "0"),
-      String(agora.getDate()).padStart(2, "0"),
-    ].join("-");
+      const listaAtualizada = await recarregarOrcamentos();
 
-    const atualizado = {
-      ...orcamento,
-      statusRecebimento: "Recebido",
-      valorRecebido: valorFinal,
-      dataRecebimento,
-    };
+      const atualizado = listaAtualizada.find(
+        (item) => String(item.id) === String(orcamento.id)
+      );
 
-    const novaLista = orcamentosSalvos.map((item) =>
-      item.id === orcamento.id ? atualizado : item
-    );
+      if (orcamentoSelecionado?.id === orcamento.id) {
+        setOrcamentoSelecionado(atualizado || null);
+      }
 
-    atualizarLista(novaLista);
-
-    if (orcamentoSelecionado?.id === orcamento.id) {
-      setOrcamentoSelecionado(atualizado);
+      alert(
+        `Recebimento registrado com sucesso!\n\nValor recebido: ${moeda(valorFinal)}`
+      );
+    } catch (erro) {
+      console.error("Erro ao registrar recebimento:", erro);
+      alert(erro.message || "Não foi possível registrar o recebimento.");
     }
-
-    alert(
-      `Recebimento registrado com sucesso!\n\nValor recebido: ${moeda(valorFinal)}`
-    );
   }
 
   // ========================================
   // EXCLUIR ORÇAMENTO
   // ========================================
 
-  function excluirOrcamento(orcamento) {
-    const novaLista = orcamentosSalvos.filter(
-      (item) => item.id !== orcamento.id
+  async function excluirOrcamento(orcamento) {
+    const confirmar = window.confirm(
+      `Deseja realmente excluir o orçamento ${orcamento.numero}? Esta ação não poderá ser desfeita.`
     );
 
-    atualizarLista(novaLista);
+    if (!confirmar) return;
 
-    setOrcamentoSelecionado(null);
-    setOrcamentoEdicao(null);
-    abrirPagina("lista-orcamentos");
+    try {
+      await requisicaoAPI(`/orcamentos/${orcamento.id}`, {
+        method: "DELETE",
+      });
+
+      await recarregarOrcamentos();
+
+      setOrcamentoSelecionado(null);
+      setOrcamentoEdicao(null);
+      abrirPagina("lista-orcamentos");
+    } catch (erro) {
+      console.error("Erro ao excluir orçamento:", erro);
+      alert(erro.message || "Não foi possível excluir o orçamento.");
+    }
   }
 
   // ========================================
@@ -310,7 +653,7 @@ function App() {
     .reverse();
 
   // ========================================
-  // PESQUISAR ORÇAMENTOS
+  // PESQUISA
   // ========================================
 
   const termoPesquisa = pesquisa.trim().toLowerCase();
@@ -357,6 +700,103 @@ function App() {
   );
 
   // ========================================
+  // PROTEÇÃO DE ACESSO
+  // ========================================
+
+  if (verificandoSessao) {
+    return (
+      <div className="login-loading">
+        Verificando acesso ao OrçaFácil...
+      </div>
+    );
+  }
+
+  if (!usuario) {
+    return <Login aoEntrar={realizarLogin} />;
+  }
+
+  if (assinaturaBloqueada && !ehAdmin) {
+    const assinaturaVencida =
+      usuario.status_assinatura === "vencida";
+
+    return (
+      <div className="assinatura-bloqueada-page">
+        <div className="assinatura-bloqueada-card">
+          <div className="assinatura-bloqueada-icone">
+            <FileText size={32} />
+          </div>
+
+          <span className="assinatura-bloqueada-marca">
+            OrçaFácil
+          </span>
+
+          <h1>
+            {assinaturaVencida
+              ? "Sua assinatura venceu"
+              : "Acesso temporariamente bloqueado"}
+          </h1>
+
+          <p className="assinatura-bloqueada-descricao">
+            {assinaturaVencida
+              ? "Para continuar utilizando o OrçaFácil, é necessário renovar sua assinatura."
+              : "Sua assinatura não está ativa. Entre em contato com o administrador para regularizar seu acesso."}
+          </p>
+
+          <div className="assinatura-bloqueada-dados">
+            <div className="assinatura-bloqueada-linha">
+              <span>Cliente</span>
+              <strong>{usuario.nome}</strong>
+            </div>
+
+            <div className="assinatura-bloqueada-linha">
+              <span>Plano</span>
+              <strong>{usuario.plano || "Não informado"}</strong>
+            </div>
+
+            <div className="assinatura-bloqueada-linha">
+              <span>Situação</span>
+              <strong
+                className={`assinatura-status ${
+                  assinaturaVencida ? "vencida" : "bloqueada"
+                }`}
+              >
+                {usuario.status_assinatura || "Não informada"}
+              </strong>
+            </div>
+
+            <div className="assinatura-bloqueada-linha">
+              <span>Vencimento</span>
+              <strong>
+                {formatarData(usuario.proxima_cobranca_em)}
+              </strong>
+            </div>
+          </div>
+
+          <div className="assinatura-bloqueada-aviso">
+            <strong>Precisa de ajuda?</strong>
+            <p>
+              Entre em contato com o administrador do OrçaFácil
+              para solicitar a renovação da sua assinatura.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="assinatura-bloqueada-sair"
+            onClick={realizarLogout}
+          >
+            Sair da conta
+          </button>
+
+          <span className="assinatura-bloqueada-rodape">
+            OrçaFácil · Gestão inteligente para sua empresa
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================================
   // TELA PRINCIPAL
   // ========================================
 
@@ -374,86 +814,126 @@ function App() {
           </div>
         </div>
 
-        <div className="menu-label">MENU PRINCIPAL</div>
+        <div className="menu-label">
+          {ehAdmin ? "ADMINISTRAÇÃO" : "MENU PRINCIPAL"}
+        </div>
 
         <nav className="menu">
-          <a
-            className={`menu-item ${
-              paginaAtual === "dashboard" ? "active" : ""
-            }`}
-            href="#dashboard"
-            onClick={(e) => {
-              e.preventDefault();
-              voltarDashboard();
-            }}
-          >
-            <LayoutDashboard size={19} />
-            Dashboard
-          </a>
+          {ehAdmin ? (
+            <a
+              className={`menu-item ${
+                paginaAtual === "usuarios" ? "active" : ""
+              }`}
+              href="#usuarios"
+              onClick={(e) => {
+                e.preventDefault();
+                abrirPagina("usuarios");
+              }}
+            >
+              <Users size={19} />
+              Usuários
+            </a>
+          ) : (
+            <>
+              <a
+                className={`menu-item ${
+                  paginaAtual === "dashboard" ? "active" : ""
+                }`}
+                href="#dashboard"
+                onClick={(e) => {
+                  e.preventDefault();
+                  voltarDashboard();
+                }}
+              >
+                <LayoutDashboard size={19} />
+                Dashboard
+              </a>
 
-          <a
-            className={`menu-item ${
-              [
-                "lista-orcamentos",
-                "orcamentos",
-                "detalhes-orcamento",
-              ].includes(paginaAtual)
-                ? "active"
-                : ""
-            }`}
-            href="#orcamentos"
-            onClick={(e) => {
-              e.preventDefault();
-              setOrcamentoEdicao(null);
-              abrirPagina("lista-orcamentos");
-            }}
-          >
-            <FileText size={19} />
-            Orçamentos
-          </a>
+              <a
+                className={`menu-item ${
+                  [
+                    "lista-orcamentos",
+                    "orcamentos",
+                    "detalhes-orcamento",
+                  ].includes(paginaAtual)
+                    ? "active"
+                    : ""
+                }`}
+                href="#orcamentos"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setOrcamentoEdicao(null);
+                  abrirPagina("lista-orcamentos");
+                }}
+              >
+                <FileText size={19} />
+                Orçamentos
+              </a>
 
-          <a
-            className={`menu-item ${
-              paginaAtual === "clientes" ? "active" : ""
-            }`}
-            href="#clientes"
-            onClick={(e) => {
-              e.preventDefault();
-              abrirPagina("clientes");
-            }}
-          >
-            <Users size={19} />
-            Clientes
-          </a>
+              <a
+                className={`menu-item ${
+                  paginaAtual === "clientes" ? "active" : ""
+                }`}
+                href="#clientes"
+                onClick={(e) => {
+                  e.preventDefault();
+                  abrirPagina("clientes");
+                }}
+              >
+                <Users size={19} />
+                Clientes
+              </a>
 
-          <a
-            className={`menu-item ${
-              paginaAtual === "recibos" ? "active" : ""
-            }`}
-            href="#recibos"
-            onClick={(e) => {
-              e.preventDefault();
-              abrirPagina("recibos");
-            }}
-          >
-            <Receipt size={19} />
-            Recebimentos
-          </a>
+              <a
+                className={`menu-item ${
+                  paginaAtual === "recibos" ? "active" : ""
+                }`}
+                href="#recibos"
+                onClick={(e) => {
+                  e.preventDefault();
+                  abrirPagina("recibos");
+                }}
+              >
+                <Receipt size={19} />
+                Recebimentos
+              </a>
+            </>
+          )}
         </nav>
 
         <div className="sidebar-bottom">
-          <a className="menu-item" href="#configuracoes">
-            <Settings size={19} />
-            Configurações
-          </a>
+          {!ehAdmin && (
+            <a
+              className={`menu-item ${
+                paginaAtual === "configuracoes" ? "active" : ""
+              }`}
+              href="#configuracoes"
+              onClick={(e) => {
+                e.preventDefault();
+                abrirPagina("configuracoes");
+              }}
+            >
+              <Settings size={19} />
+              Configurações
+            </a>
+          )}
 
           <div className="profile">
             <div className="avatar">OF</div>
 
-            <div>
-              <strong>Minha empresa</strong>
-              <span>Plano gratuito</span>
+            <div className="profile-info">
+              <strong>{usuario?.nome || "Usuário"}</strong>
+              <span>{ehAdmin ? "Administrador" : "Cliente"}</span>
             </div>
+
+            <button
+              type="button"
+              className="logout-button"
+              onClick={realizarLogout}
+              title="Sair da conta"
+            >
+              Sair
+            </button>
           </div>
         </div>
       </aside>
@@ -465,42 +945,56 @@ function App() {
             <strong>OrçaFácil</strong>
           </div>
 
-          <div className="search-box">
-            <Search size={18} />
+          {!ehAdmin && (
+            <>
+              <div className="search-box">
+                <Search size={18} />
 
-            <input
-              type="search"
-              placeholder="Pesquisar cliente, orçamento ou serviço..."
-              value={pesquisa}
-              onChange={(e) => setPesquisa(e.target.value)}
-            />
+                <input
+                  type="search"
+                  placeholder="Pesquisar cliente, orçamento ou serviço..."
+                  value={pesquisa}
+                  onChange={(e) => setPesquisa(e.target.value)}
+                />
 
-            {pesquisa && (
+                {pesquisa && (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => setPesquisa("")}
+                    aria-label="Limpar pesquisa"
+                    title="Limpar pesquisa"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+
               <button
                 type="button"
-                className="search-clear"
-                onClick={() => setPesquisa("")}
-                aria-label="Limpar pesquisa"
-                title="Limpar pesquisa"
+                className="notification"
+                aria-label="Notificações"
               >
-                <X size={16} />
+                <Bell size={20} />
               </button>
-            )}
-          </div>
-
-          <button
-            type="button"
-            className="notification"
-            aria-label="Notificações"
-          >
-            <Bell size={20} />
-          </button>
+            </>
+          )}
         </header>
 
         <section className="content">
-          {/* LISTA DE ORÇAMENTOS */}
-
-          {paginaAtual === "lista-orcamentos" ? (
+          {ehAdmin ? (
+            <Administracao />
+          ) : carregandoDados ? (
+            <div className="orcamentos-vazio">
+              <span>Carregando seus dados...</span>
+            </div>
+          ) : paginaAtual === "configuracoes" ? (
+            <Configuracoes
+              configuracoes={configuracoes}
+              usuario={usuario}
+              aoSalvar={salvarConfiguracoes}
+            />
+          ) : paginaAtual === "lista-orcamentos" ? (
             <ListaOrcamentos
               orcamentos={orcamentosSalvos}
               aoNovo={() => {
@@ -551,12 +1045,8 @@ function App() {
             <>
               <div className="welcome">
                 <div>
-                  <span className="date-label">
-                    PAINEL DE CONTROLE
-                  </span>
-
+                  <span className="date-label">PAINEL DE CONTROLE</span>
                   <h1>Visão geral</h1>
-
                   <p>Bem-vindo ao seu painel de gestão.</p>
                 </div>
 
@@ -652,29 +1142,16 @@ function App() {
                         resultadosPesquisa.map((item) => (
                           <tr key={item.id}>
                             <td>{item.numero}</td>
-
-                            <td>
-                              {item.cliente || "Não informado"}
-                            </td>
-
+                            <td>{item.cliente || "Não informado"}</td>
                             <td>{obterServico(item)}</td>
-
-                            <td className="value">
-                              {moeda(item.total)}
-                            </td>
-
+                            <td className="value">{moeda(item.total)}</td>
                             <td>
                               <span
-                                className={`status ${
-                                  (
-                                    item.status || "Pendente"
-                                  ).toLowerCase()
-                                }`}
+                                className={`status ${(item.status || "Pendente").toLowerCase()}`}
                               >
                                 {item.status || "Pendente"}
                               </span>
                             </td>
-
                             <td>
                               <button
                                 type="button"
@@ -692,13 +1169,11 @@ function App() {
                           <td colSpan="6">
                             <div className="orcamentos-vazio">
                               <Search size={30} />
-
                               <strong>
                                 {termoPesquisa
                                   ? "Nenhum resultado encontrado"
                                   : "Nenhum orçamento cadastrado"}
                               </strong>
-
                               <span>
                                 {termoPesquisa
                                   ? "Verifique o nome do cliente ou tente outro termo."
@@ -719,13 +1194,10 @@ function App() {
                 </div>
 
                 <div>
-                  <h3>
-                    Organize seus serviços com facilidade!
-                  </h3>
-
+                  <h3>Organize seus serviços com facilidade!</h3>
                   <p>
-                    Crie orçamentos profissionais e mantenha seus
-                    clientes sempre organizados.
+                    Crie orçamentos profissionais e mantenha seus clientes
+                    sempre organizados.
                   </p>
                 </div>
               </section>
@@ -733,6 +1205,341 @@ function App() {
           )}
         </section>
       </main>
+    </div>
+  );
+}
+
+// ========================================
+// TELA DE LOGIN
+// ========================================
+
+function Login({ aoEntrar }) {
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [carregando, setCarregando] = useState(false);
+
+  async function enviarLogin(e) {
+    e.preventDefault();
+    setErro("");
+    setCarregando(true);
+
+    try {
+      await aoEntrar(email.trim(), senha);
+    } catch (erro) {
+      setErro(erro.message || "E-mail ou senha incorretos.");
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand-icon">
+          <FileText size={30} />
+        </div>
+
+        <h1>OrçaFácil</h1>
+
+        <p className="login-subtitle">
+          Gestão inteligente para sua empresa
+        </p>
+
+        <form onSubmit={enviarLogin}>
+          <div className="login-field">
+            <label htmlFor="login-email">E-mail</label>
+            <input
+              id="login-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Digite seu e-mail"
+              autoComplete="username"
+              required
+            />
+          </div>
+
+          <div className="login-field">
+            <label htmlFor="login-senha">Senha</label>
+            <input
+              id="login-senha"
+              type="password"
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              placeholder="Digite sua senha"
+              autoComplete="current-password"
+              required
+            />
+          </div>
+
+          {erro && <div className="login-error">{erro}</div>}
+
+          <button
+            type="submit"
+            className="login-button"
+            disabled={carregando}
+          >
+            {carregando ? "Entrando..." : "Entrar"}
+          </button>
+        </form>
+
+        <span className="login-footer">
+          Acesso restrito • OrçaFácil
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// TELA DE CONFIGURAÇÕES
+// ========================================
+
+function Configuracoes({ configuracoes, usuario, aoSalvar }) {
+  const [formulario, setFormulario] = useState({
+    nomeEmpresa: "",
+    documento: "",
+    telefone: "",
+    email: "",
+    endereco: "",
+    validade: "7",
+    pagamento: "",
+    observacoes: "",
+  });
+
+  const [salvo, setSalvo] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    setFormulario({
+      nomeEmpresa: configuracoes.nomeEmpresa || "",
+      documento: configuracoes.documento || "",
+      telefone: configuracoes.telefone || "",
+      email: configuracoes.email || "",
+      endereco: configuracoes.endereco || "",
+      validade: configuracoes.validade || "7",
+      pagamento: configuracoes.pagamento || "",
+      observacoes: configuracoes.observacoes || "",
+    });
+  }, [configuracoes]);
+
+  function atualizarCampo(campo, valor) {
+    setFormulario((anterior) => ({
+      ...anterior,
+      [campo]: valor,
+    }));
+
+    setSalvo(false);
+  }
+
+  async function salvarFormulario(e) {
+    e.preventDefault();
+    setSalvando(true);
+    setSalvo(false);
+
+    try {
+      await aoSalvar(formulario);
+      setSalvo(true);
+    } catch {
+      // A mensagem de erro é apresentada pela função do App.
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div className="orcamentos-page">
+      <div className="orcamentos-header">
+        <div>
+          <span className="clientes-label">
+            PERSONALIZAÇÃO DO SISTEMA
+          </span>
+          <h1>Configurações</h1>
+          <p>
+            Gerencie os dados da sua empresa e personalize seus documentos.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={salvarFormulario}>
+        <section className="orcamento-panel">
+          <h2>
+            <Building2 size={20} />
+            Dados da empresa
+          </h2>
+
+          <p>Cadastre as informações que identificam sua empresa.</p>
+
+          <div className="orcamento-grid" style={{ marginTop: 20 }}>
+            <div>
+              <label>Nome da empresa</label>
+              <input
+                type="text"
+                value={formulario.nomeEmpresa}
+                onChange={(e) =>
+                  atualizarCampo("nomeEmpresa", e.target.value)
+                }
+                placeholder="Ex.: Minha Empresa"
+              />
+            </div>
+
+            <div>
+              <label>CNPJ ou CPF</label>
+              <input
+                type="text"
+                value={formulario.documento}
+                onChange={(e) =>
+                  atualizarCampo("documento", e.target.value)
+                }
+                placeholder="Digite seu documento"
+              />
+            </div>
+
+            <div>
+              <label>Telefone / WhatsApp</label>
+              <input
+                type="text"
+                value={formulario.telefone}
+                onChange={(e) =>
+                  atualizarCampo("telefone", e.target.value)
+                }
+                placeholder="(00) 00000-0000"
+              />
+            </div>
+
+            <div>
+              <label>E-mail</label>
+              <input
+                type="email"
+                value={formulario.email}
+                onChange={(e) =>
+                  atualizarCampo("email", e.target.value)
+                }
+                placeholder="empresa@email.com"
+              />
+            </div>
+
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Endereço completo</label>
+              <input
+                type="text"
+                value={formulario.endereco}
+                onChange={(e) =>
+                  atualizarCampo("endereco", e.target.value)
+                }
+                placeholder="Rua, número, bairro, cidade e estado"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="orcamento-panel">
+          <h2>
+            <FileText size={20} />
+            Padrões dos orçamentos
+          </h2>
+
+          <p>
+            Defina informações que poderão ser usadas nos próximos documentos.
+          </p>
+
+          <div className="orcamento-grid" style={{ marginTop: 20 }}>
+            <div>
+              <label>Validade padrão (dias)</label>
+              <input
+                type="number"
+                min="1"
+                value={formulario.validade}
+                onChange={(e) =>
+                  atualizarCampo("validade", e.target.value)
+                }
+                placeholder="7"
+              />
+            </div>
+
+            <div>
+              <label>Condições de pagamento</label>
+              <input
+                type="text"
+                value={formulario.pagamento}
+                onChange={(e) =>
+                  atualizarCampo("pagamento", e.target.value)
+                }
+                placeholder="Ex.: À vista ou parcelado"
+              />
+            </div>
+
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Observações padrão</label>
+              <textarea
+                rows="4"
+                value={formulario.observacoes}
+                onChange={(e) =>
+                  atualizarCampo("observacoes", e.target.value)
+                }
+                placeholder="Digite uma observação padrão para seus orçamentos..."
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="orcamento-panel">
+          <h2>
+            <Settings size={20} />
+            Informações do sistema
+          </h2>
+
+          <div className="orcamento-grid" style={{ marginTop: 20 }}>
+            <div>
+              <label>Nome do sistema</label>
+              <strong>OrçaFácil</strong>
+            </div>
+
+            <div>
+              <label>Versão</label>
+              <strong>1.0.0</strong>
+            </div>
+
+            <div>
+              <label>Plano atual</label>
+              <strong>{usuario?.plano || "Nenhum plano cadastrado"}</strong>
+
+              <small style={{ display: "block", marginTop: 6 }}>
+                Situação:{" "}
+                {usuario?.status_assinatura === "ativa"
+                  ? "Ativo"
+                  : usuario?.status_assinatura === "pendente"
+                  ? "Pagamento pendente"
+                  : usuario?.status_assinatura || "Não informado"}
+              </small>
+            </div>
+          </div>
+        </section>
+
+        <div className="orcamento-acoes">
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={salvando}
+          >
+            <Save size={18} />
+            {salvando ? "Salvando..." : "Salvar configurações"}
+          </button>
+
+          {salvo && (
+            <span
+              style={{
+                color: "#16a34a",
+                fontWeight: 600,
+              }}
+            >
+              <Check size={16} style={{ verticalAlign: "middle" }} />
+              Configurações salvas com sucesso!
+            </span>
+          )}
+        </div>
+      </form>
     </div>
   );
 }
@@ -749,7 +1556,8 @@ function Recebimentos({
   const aguardando = orcamentos.filter(
     (item) =>
       (item.status || "Pendente").trim().toLowerCase() === "aprovado" &&
-      (item.statusRecebimento || "Pendente").trim().toLowerCase() !== "recebido"
+      (item.statusRecebimento || "Pendente").trim().toLowerCase() !==
+        "recebido"
   );
 
   const recebidos = orcamentos.filter(
@@ -773,12 +1581,8 @@ function Recebimentos({
     <div className="orcamentos-page">
       <div className="orcamentos-header">
         <div>
-          <span className="clientes-label">
-            GESTÃO FINANCEIRA
-          </span>
-
+          <span className="clientes-label">GESTÃO FINANCEIRA</span>
           <h1>Recebimentos</h1>
-
           <p>
             Acompanhe os valores pendentes e os recebimentos realizados.
           </p>
@@ -815,7 +1619,6 @@ function Recebimentos({
         <div className="panel-header">
           <div>
             <h2>Aguardando recebimento</h2>
-
             <p>
               {aguardando.length} orçamento(s) aguardando recebimento.
             </p>
@@ -840,25 +1643,14 @@ function Recebimentos({
                 aguardando.map((item) => (
                   <tr key={item.id}>
                     <td>{item.numero}</td>
-
-                    <td>
-                      {item.cliente || "Não informado"}
-                    </td>
-
-                    <td>
-                      {formatarData(item.dataEmissao)}
-                    </td>
-
-                    <td className="value">
-                      {moeda(item.total)}
-                    </td>
-
+                    <td>{item.cliente || "Não informado"}</td>
+                    <td>{formatarData(item.dataEmissao)}</td>
+                    <td className="value">{moeda(item.total)}</td>
                     <td>
                       <span className="status pendente">
                         Aguardando recebimento
                       </span>
                     </td>
-
                     <td>
                       <div className="orcamento-acoes">
                         <button
@@ -887,11 +1679,7 @@ function Recebimentos({
                   <td colSpan="6">
                     <div className="orcamentos-vazio">
                       <Receipt size={30} />
-
-                      <strong>
-                        Nenhum recebimento pendente
-                      </strong>
-
+                      <strong>Nenhum recebimento pendente</strong>
                       <span>
                         Quando você aprovar um orçamento, ele aparecerá aqui.
                       </span>
@@ -908,7 +1696,6 @@ function Recebimentos({
         <div className="panel-header">
           <div>
             <h2>Recebimentos realizados</h2>
-
             <p>
               {recebidos.length} recebimento(s) registrado(s).
             </p>
@@ -933,25 +1720,14 @@ function Recebimentos({
                 recebidos.map((item) => (
                   <tr key={item.id}>
                     <td>{item.numero}</td>
-
-                    <td>
-                      {item.cliente || "Não informado"}
-                    </td>
-
-                    <td>
-                      {formatarData(item.dataRecebimento)}
-                    </td>
-
+                    <td>{item.cliente || "Não informado"}</td>
+                    <td>{formatarData(item.dataRecebimento)}</td>
                     <td className="value">
                       {moeda(item.valorRecebido || item.total)}
                     </td>
-
                     <td>
-                      <span className="status aprovado">
-                        Recebido
-                      </span>
+                      <span className="status aprovado">Recebido</span>
                     </td>
-
                     <td>
                       <button
                         type="button"
@@ -969,11 +1745,7 @@ function Recebimentos({
                   <td colSpan="6">
                     <div className="orcamentos-vazio">
                       <Wallet size={30} />
-
-                      <strong>
-                        Nenhum recebimento realizado
-                      </strong>
-
+                      <strong>Nenhum recebimento realizado</strong>
                       <span>
                         Os pagamentos registrados aparecerão neste histórico.
                       </span>
@@ -1048,10 +1820,16 @@ function DetalhesOrcamento({
         63
       );
 
+      doc.text(
+        `Forma de pagamento: ${orcamento.formaPagamento || "Não informada"}`,
+        15,
+        70
+      );
+
       doc.setTextColor(...escuro);
       doc.setFontSize(13);
       doc.setFont("helvetica", "bold");
-      doc.text("DADOS DO CLIENTE", 15, 77);
+      doc.text("DADOS DO CLIENTE", 15, 84);
 
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
@@ -1059,19 +1837,19 @@ function DetalhesOrcamento({
       doc.text(
         `Nome: ${orcamento.cliente || "Não informado"}`,
         15,
-        85
+        92
       );
 
       doc.text(
         `Telefone: ${orcamento.telefoneCliente || "Não informado"}`,
         15,
-        92
+        99
       );
 
       doc.text(
         `E-mail: ${orcamento.emailCliente || "Não informado"}`,
         15,
-        99
+        106
       );
 
       const linhas = itens.map((item) => {
@@ -1087,7 +1865,7 @@ function DetalhesOrcamento({
       });
 
       autoTable(doc, {
-        startY: 110,
+        startY: 117,
         head: [[
           "Descrição",
           "Quantidade",
@@ -1160,11 +1938,7 @@ function DetalhesOrcamento({
       doc.setFontSize(9);
       doc.setTextColor(...cinza);
 
-      const textoObservacoes = doc.splitTextToSize(
-        observacoes,
-        180
-      );
-
+      const textoObservacoes = doc.splitTextToSize(observacoes, 180);
       doc.text(textoObservacoes, 15, observacaoY + 8);
 
       const quantidadePaginas = doc.internal.getNumberOfPages();
@@ -1193,9 +1967,7 @@ function DetalhesOrcamento({
     }
   }
 
-  const statusAtual = (
-    orcamento.status || "Pendente"
-  ).toLowerCase();
+  const statusAtual = (orcamento.status || "Pendente").toLowerCase();
 
   const recebimentoConcluido =
     (orcamento.statusRecebimento || "").toLowerCase() === "recebido";
@@ -1247,6 +2019,13 @@ function DetalhesOrcamento({
               {orcamento.status || "Pendente"}
             </span>
           </div>
+
+          <div>
+            <label>Forma de pagamento</label>
+            <strong>
+              {orcamento.formaPagamento || "Não informada"}
+            </strong>
+          </div>
         </div>
       </section>
 
@@ -1265,16 +2044,12 @@ function DetalhesOrcamento({
 
             <div>
               <label>Data do recebimento</label>
-              <strong>
-                {formatarData(orcamento.dataRecebimento)}
-              </strong>
+              <strong>{formatarData(orcamento.dataRecebimento)}</strong>
             </div>
 
             <div>
               <label>Valor recebido</label>
-              <strong>
-                {moeda(orcamento.valorRecebido)}
-              </strong>
+              <strong>{moeda(orcamento.valorRecebido)}</strong>
             </div>
           </div>
         </section>
@@ -1289,9 +2064,7 @@ function DetalhesOrcamento({
         <div className="orcamento-grid">
           <div>
             <label>Nome</label>
-            <strong>
-              {orcamento.cliente || "Não informado"}
-            </strong>
+            <strong>{orcamento.cliente || "Não informado"}</strong>
           </div>
 
           <div>
@@ -1375,7 +2148,6 @@ function DetalhesOrcamento({
 
       <section className="orcamento-panel">
         <h2>Observações</h2>
-
         <p style={{ whiteSpace: "pre-wrap" }}>
           {orcamento.observacoes || "Nenhuma observação informada."}
         </p>
@@ -1467,10 +2239,7 @@ function DetalhesOrcamento({
 function StatCard({ icon, title, value, detail, color }) {
   return (
     <div className="stat-card">
-      <div className={`stat-icon ${color}`}>
-        {icon}
-      </div>
-
+      <div className={`stat-icon ${color}`}>{icon}</div>
       <span>{title}</span>
       <h2>{value}</h2>
       <small>{detail}</small>

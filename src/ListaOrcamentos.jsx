@@ -12,9 +12,12 @@ import {
   ArrowLeft,
   CheckCircle2,
   Clock,
-  XCircle,
   Wallet,
 } from "lucide-react";
+
+// ========================================
+// FORMATAR MOEDA
+// ========================================
 
 function moeda(valor) {
   return Number(valor || 0).toLocaleString("pt-BR", {
@@ -22,6 +25,10 @@ function moeda(valor) {
     currency: "BRL",
   });
 }
+
+// ========================================
+// OBTER DESCRIÇÃO DO SERVIÇO
+// ========================================
 
 function obterServico(item) {
   if (item.servico) return item.servico;
@@ -33,11 +40,29 @@ function obterServico(item) {
   const primeiroServico = item.itens[0].descricao;
 
   if (item.itens.length === 1) {
-    return primeiroServico;
+    return primeiroServico || "Não informado";
   }
 
-  return `${primeiroServico} + ${item.itens.length - 1} item(ns)`;
+  return `${primeiroServico || "Serviço"} + ${item.itens.length - 1} item(ns)`;
 }
+
+// ========================================
+// NORMALIZAR STATUS
+// ========================================
+
+function normalizarStatus(status) {
+  const valor = String(status || "Pendente").toLowerCase();
+
+  if (valor === "aprovado") return "aprovado";
+  if (valor === "recusado") return "recusado";
+  if (valor === "cancelado") return "recusado";
+
+  return "pendente";
+}
+
+// ========================================
+// COMPONENTE PRINCIPAL
+// ========================================
 
 function ListaOrcamentos({
   orcamentos = [],
@@ -50,6 +75,10 @@ function ListaOrcamentos({
   const [pesquisa, setPesquisa] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("todos");
 
+  // ========================================
+  // ORDENAR ORÇAMENTOS
+  // ========================================
+
   const orcamentosOrdenados = useMemo(() => {
     return [...orcamentos].sort((a, b) => {
       const numeroA = Number(
@@ -60,35 +89,51 @@ function ListaOrcamentos({
         String(b.numero || "").replace(/\D/g, "")
       );
 
-      return numeroB - numeroA;
+      if (numeroA !== numeroB) {
+        return numeroB - numeroA;
+      }
+
+      return Number(b.id || 0) - Number(a.id || 0);
     });
   }, [orcamentos]);
 
-  const orcamentosFiltrados = orcamentosOrdenados.filter((item) => {
+  // ========================================
+  // FILTRAR ORÇAMENTOS
+  // ========================================
+
+  const orcamentosFiltrados = useMemo(() => {
     const termo = pesquisa.toLowerCase().trim();
 
-    const numero = String(item.numero || "").toLowerCase();
-    const cliente = String(item.cliente || "").toLowerCase();
+    return orcamentosOrdenados.filter((item) => {
+      const numero = String(item.numero || "").toLowerCase();
+      const cliente = String(item.cliente || "").toLowerCase();
 
-    const correspondePesquisa =
-      numero.includes(termo) || cliente.includes(termo);
+      const correspondePesquisa =
+        numero.includes(termo) ||
+        cliente.includes(termo);
 
-    const status = (item.status || "Pendente").toLowerCase();
+      const status = normalizarStatus(item.status);
 
-    const correspondeStatus =
-      filtroStatus === "todos" || status === filtroStatus;
+      const correspondeStatus =
+        filtroStatus === "todos" ||
+        status === filtroStatus;
 
-    return correspondePesquisa && correspondeStatus;
-  });
+      return correspondePesquisa && correspondeStatus;
+    });
+  }, [orcamentosOrdenados, pesquisa, filtroStatus]);
+
+  // ========================================
+  // INDICADORES
+  // ========================================
 
   const totalOrcamentos = orcamentos.length;
 
   const totalPendente = orcamentos.filter(
-    (item) => (item.status || "Pendente").toLowerCase() === "pendente"
+    (item) => normalizarStatus(item.status) === "pendente"
   ).length;
 
   const totalAprovado = orcamentos.filter(
-    (item) => (item.status || "Pendente").toLowerCase() === "aprovado"
+    (item) => normalizarStatus(item.status) === "aprovado"
   ).length;
 
   const valorTotal = orcamentos.reduce(
@@ -96,23 +141,37 @@ function ListaOrcamentos({
     0
   );
 
+  // ========================================
+  // EXCLUIR ORÇAMENTO
+  // ========================================
+
   function confirmarExclusao(orcamento) {
     const confirmou = window.confirm(
       `Deseja realmente excluir o orçamento ${orcamento.numero}? Esta ação não poderá ser desfeita.`
     );
 
-    if (confirmou) {
+    if (confirmou && typeof aoExcluir === "function") {
       aoExcluir(orcamento);
     }
   }
+
+  // ========================================
+  // TELA
+  // ========================================
 
   return (
     <div className="orcamentos-page">
       <div className="orcamentos-header">
         <div>
-          <span className="clientes-label">GESTÃO COMERCIAL</span>
+          <span className="clientes-label">
+            GESTÃO COMERCIAL
+          </span>
+
           <h1>Meus orçamentos</h1>
-          <p>Consulte, pesquise e gerencie seus orçamentos.</p>
+
+          <p>
+            Consulte, pesquise e gerencie seus orçamentos.
+          </p>
         </div>
 
         <button
@@ -125,13 +184,18 @@ function ListaOrcamentos({
         </button>
       </div>
 
+      {/* INDICADORES */}
+
       <div className="stats">
         <div className="stat-card">
           <div className="stat-icon green">
             <FileText />
           </div>
+
           <span>Total de orçamentos</span>
+
           <h2>{totalOrcamentos}</h2>
+
           <small>Documentos cadastrados</small>
         </div>
 
@@ -139,8 +203,11 @@ function ListaOrcamentos({
           <div className="stat-icon yellow">
             <Clock />
           </div>
+
           <span>Pendentes</span>
+
           <h2>{totalPendente}</h2>
+
           <small>Aguardando aprovação</small>
         </div>
 
@@ -148,8 +215,11 @@ function ListaOrcamentos({
           <div className="stat-icon blue">
             <CheckCircle2 />
           </div>
+
           <span>Aprovados</span>
+
           <h2>{totalAprovado}</h2>
+
           <small>Serviços aprovados</small>
         </div>
 
@@ -157,21 +227,31 @@ function ListaOrcamentos({
           <div className="stat-icon purple">
             <Wallet />
           </div>
+
           <span>Valor total</span>
-          <h2 style={{ fontSize: "20px" }}>{moeda(valorTotal)}</h2>
+
+          <h2 style={{ fontSize: "20px" }}>
+            {moeda(valorTotal)}
+          </h2>
+
           <small>Soma dos orçamentos</small>
         </div>
       </div>
+
+      {/* LISTA */}
 
       <section className="panel">
         <div className="panel-header">
           <div>
             <h2>Todos os documentos</h2>
+
             <p>
               {orcamentosFiltrados.length} orçamento(s) encontrado(s).
             </p>
           </div>
         </div>
+
+        {/* PESQUISA E FILTROS */}
 
         <div
           style={{
@@ -200,7 +280,9 @@ function ListaOrcamentos({
               type="text"
               placeholder="Pesquisar por número ou cliente..."
               value={pesquisa}
-              onChange={(e) => setPesquisa(e.target.value)}
+              onChange={(evento) =>
+                setPesquisa(evento.target.value)
+              }
               style={{
                 width: "100%",
                 padding: "13px 0",
@@ -227,7 +309,9 @@ function ListaOrcamentos({
 
             <select
               value={filtroStatus}
-              onChange={(e) => setFiltroStatus(e.target.value)}
+              onChange={(evento) =>
+                setFiltroStatus(evento.target.value)
+              }
               style={{
                 background: "transparent",
                 color: "#f1f5f2",
@@ -245,6 +329,8 @@ function ListaOrcamentos({
           </div>
         </div>
 
+        {/* TABELA */}
+
         <div className="table-container">
           <table>
             <thead>
@@ -261,17 +347,17 @@ function ListaOrcamentos({
             <tbody>
               {orcamentosFiltrados.length > 0 ? (
                 orcamentosFiltrados.map((item) => {
-                  const status = (
-                    item.status || "Pendente"
-                  ).toLowerCase();
+                  const status = normalizarStatus(item.status);
 
                   return (
                     <tr key={item.id}>
                       <td>
-                        <strong>{item.numero}</strong>
+                        <strong>{item.numero || `#${item.id}`}</strong>
                       </td>
 
-                      <td>{item.cliente || "Não informado"}</td>
+                      <td>
+                        {item.cliente || "Não informado"}
+                      </td>
 
                       <td>{obterServico(item)}</td>
 
@@ -297,7 +383,7 @@ function ListaOrcamentos({
                             type="button"
                             className="secondary-button"
                             title="Abrir orçamento"
-                            onClick={() => aoAbrir(item)}
+                            onClick={() => aoAbrir?.(item)}
                           >
                             <Eye size={16} />
                           </button>
@@ -306,7 +392,7 @@ function ListaOrcamentos({
                             type="button"
                             className="secondary-button"
                             title="Editar orçamento"
-                            onClick={() => aoEditar(item)}
+                            onClick={() => aoEditar?.(item)}
                           >
                             <Pencil size={16} />
                           </button>
@@ -334,7 +420,11 @@ function ListaOrcamentos({
                       {orcamentos.length === 0 ? (
                         <>
                           <FileText size={32} />
-                          <strong>Nenhum orçamento cadastrado</strong>
+
+                          <strong>
+                            Nenhum orçamento cadastrado
+                          </strong>
+
                           <span>
                             Crie seu primeiro orçamento para começar.
                           </span>
@@ -342,7 +432,11 @@ function ListaOrcamentos({
                       ) : (
                         <>
                           <Search size={32} />
-                          <strong>Nenhum resultado encontrado</strong>
+
+                          <strong>
+                            Nenhum resultado encontrado
+                          </strong>
+
                           <span>
                             Tente alterar a pesquisa ou o filtro.
                           </span>
